@@ -1,0 +1,8 @@
+# .streamlit/config.toml
+[theme]
+# DMDG 공식 시그니처 딥 다크 팔레트
+primaryColor = "#0284c7"                # 액션 버튼 및 포인트 컬러 (스카이 블루)
+backgroundColor = "#0b0f19"             # 배경색 (우주 깊은 밤의 딥 네이비)
+secondaryBackgroundColor = "#131d31"    # 사이드바 및 입력 박스 배경
+textColor = "#f8fafc"                   # 기본 텍스트 (순백색보다 부드러운 슬레이트 50)
+font = "sans serif"

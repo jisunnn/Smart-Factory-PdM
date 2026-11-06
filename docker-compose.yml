@@ -1,0 +1,39 @@
+# version: '3.8' # 도커 컴포즈를 읽는 도커 엔진이 참고할 실행 버전 (최신 버전은 안쓴다)
+
+services:
+  # 1. TimescaleDB (시계열 데이터베이스)
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    container_name: smart_factory_timescaledb
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: smart_factory
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # 2. Apache Kafka (메시지 브로커 - KRaft 모드 또는 주키퍼 포함형)
+  # 개발 테스트용으로 가볍게 띄울 수 있는 구성입니다.
+  kafka:
+    image: apache/kafka:3.7.0 # 카프카 이미지
+    container_name: smart_factory_kafka # 컨테이너의 이름 설정
+    ports:
+      - "9092:9092" # localhost:9092로 연결 (컴퓨터(호스트)의 9092번 포트로 들어오는 요청을 카프카 컨테이너 내부의 9092번 포트로 연결)
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller' # 데이터 전달자, 메타데이터 관리자 역할
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093' # 카프카 서버가 내부 컨테이너에서 보는 주소(내부용, 컨트롤러용)
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://localhost:9092' # 접속위치에 따른 주소 (내 컴퓨터)
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@localhost:9093'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 1
+      CLUSTER_ID: 'Mk3OEYBSD3T2MdAWXqK90g==' #로컬에서 흔히 사용하는 카프카 클러스터 고유의 식별 번호(UUID)
+
+volumes: # 컨테이너가 일회용이라서
+  pgdata: # 데이터 저장 공간 지정 (TimescaleDB(PostgreSQL)는 실제 데이터 파일을 컨테이너 내부의 /var/lib/postgresql/data라는 경로에 저장되나 컨테이너 다시 열면 사라진다 이 사라지는 걸 pgdata에 저장)
