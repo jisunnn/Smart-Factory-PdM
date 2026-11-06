@@ -54,3 +54,12 @@ class RULPredictor:
             pred = float(np.mean([m(x).item() for m in self.models]))
         rul = float(np.clip(pred * self.cap, 0.0, self.cap))
         return {"rul": rul, "health_index": rul / self.cap * 100.0}
+
+    def warmup(self) -> dict:
+        return self.scaler.warmup()
+
+    def prune(self, idle_sec: float) -> int:
+        return self.scaler.prune(idle_sec)
+
+    def tracked(self) -> int:
+        return self.scaler.tracked()

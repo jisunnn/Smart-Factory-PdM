@@ -48,6 +48,9 @@ class Settings:
     ALERT_HYSTERESIS: float = float(os.getenv("ALERT_HYSTERESIS", "5"))
     KAFKA_TOPIC_ALERTS: str = os.getenv("KAFKA_TOPIC_ALERTS", "factory.alerts")
 
+    # 메모리 정리 기준 시간 (기준 시간 이상 데이터가 없는 엔진의 윈도우 버퍼와 알림 상태를 삭제)
+    ENGINE_IDLE_PRUNE_SEC: int = int(os.getenv("ENGINE_IDLE_PRUNE_SEC", "3600"))
+    
     #property : 함수인데 변수처럼 사용 가능하게
     @property
     def DATABASE_URL(self) -> str:

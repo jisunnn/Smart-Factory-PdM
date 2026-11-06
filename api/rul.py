@@ -40,3 +40,13 @@ async def summary(request: Request):
         "rul_service": request.app.state.rul_service.status(),
         "replay": request.app.state.replay_service.status(),
     }
+
+
+@router.get("/warmup")
+async def warmup(request: Request):
+    """예측 대기 중(윈도우 수집 중)인 엔진과 진행 상황. 서버 안의 RUL 서비스가 켜져 있을 때만 의미가 있다."""
+    svc = request.app.state.rul_service
+    w = svc.warmup()
+    window = getattr(getattr(svc.predictor, "scaler", None), "window", 30)
+    engines = [{"asset_id": a, "filled": n} for a, n in sorted(w.items(), key=lambda kv: -kv[1])]
+    return {"window": window, "count": len(engines), "engines": engines[:200]}

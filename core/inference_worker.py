@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
@@ -94,8 +95,14 @@ async def run():
     logger.info("Inference worker 시작 (models=%d)", len(predictor.models))
 
     saved = 0
+    last_prune = time.monotonic()
+    idle = getattr(settings, "ENGINE_IDLE_PRUNE_SEC", 3600)
     try:
         while True:
+            if time.monotonic() - last_prune > 60:         # 오래 데이터가 없는 엔진의 메모리 정리
+                alert_engine.prune(idle)
+                predictor.prune(idle)
+                last_prune = time.monotonic()
             batch = await consumer.getmany(timeout_ms=1000, max_records=500)
             if not batch:
                 continue

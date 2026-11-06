@@ -69,7 +69,8 @@ async def insert_rul_predictions(pool, rows: list[dict]) -> int:
 async def fetch_latest_rul(pool):
     """엔진별 가장 최근 예측 1건 (대시보드 현황판용)."""
     sql = """
-    SELECT DISTINCT ON (asset_id) asset_id, time, cycle, rul_pred, health_index, rul_true
+    SELECT DISTINCT ON (asset_id) asset_id, time, cycle, rul_pred, health_index, rul_true,
+           EXTRACT(EPOCH FROM (now() - time))::float8 AS age_sec
     FROM rul_predictions ORDER BY asset_id, time DESC
     """
     async with pool.acquire() as conn:

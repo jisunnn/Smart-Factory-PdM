@@ -6,20 +6,34 @@
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 LEVEL_NAME = {1: "warning", 2: "critical"}
 
 
 class AlertEngine:
-    def __init__(self, warn: float = 60.0, crit: float = 30.0, hysteresis: float = 5.0):
+    def __init__(self, warn: float = 60.0, crit: float = 30.0, hysteresis: float = 5.0, clock=time.monotonic):
         self.warn, self.crit, self.h = float(warn), float(crit), float(hysteresis)
         self._level: dict[str, int] = {}
         self._last_cycle: dict[str, int] = {}
+        self._last_seen: dict[str, float] = {}
+        self._clock = clock
 
     def reset(self):
         self._level.clear()
         self._last_cycle.clear()
+        self._last_seen.clear()
+
+    def prune(self, idle_sec: float) -> int:
+        """idle_sec 이상 평가가 없던 엔진의 상태를 삭제(메모리 정리). 다시 나타나면 정상 단계부터 시작."""
+        now = self._clock()
+        gone = [a for a, t in self._last_seen.items() if now - t > idle_sec]
+        for a in gone:
+            self._level.pop(a, None)
+            self._last_cycle.pop(a, None)
+            self._last_seen.pop(a, None)
+        return len(gone)
 
     def level_of(self, asset_id: str) -> int:
         return self._level.get(asset_id, 0)
@@ -38,6 +52,7 @@ class AlertEngine:
 
     def evaluate(self, asset_id: str, cycle, health_index: float, rul_pred: float, ts: str | None = None):
         """예측 1건 평가 → 단계가 올라갔으면 알림 dict, 아니면 None."""
+        self._last_seen[asset_id] = self._clock()
         if cycle is not None:
             last = self._last_cycle.get(asset_id)
             if last is not None and cycle < last:        # 리플레이 재시작 → 상태 초기화

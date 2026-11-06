@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
@@ -20,6 +21,8 @@ from models.alert_repository import init_alert_table, insert_alerts
 from core.alert_engine import AlertEngine
 
 logger = logging.getLogger(__name__)
+
+PRUNE_EVERY_SEC = 60
 
 
 class RULInferenceService:
@@ -83,9 +86,25 @@ class RULInferenceService:
         self.started = False
         logger.info("RUL 추론 서비스 종료")
 
+    def warmup(self) -> dict:
+        """윈도우가 아직 덜 찬(예측 대기 중인) 엔진 → 모인 사이클 수."""
+        return self.predictor.warmup() if self.predictor and hasattr(self.predictor, "warmup") else {}
+
+    def _prune(self):
+        idle = getattr(settings, "ENGINE_IDLE_PRUNE_SEC", 3600)
+        n = self.alert_engine.prune(idle)
+        if self.predictor is not None and hasattr(self.predictor, "prune"):
+            n += self.predictor.prune(idle)
+        if n:
+            logger.info("오래 데이터가 없는 엔진 상태 %d건을 정리했습니다. (기준 %ds)", n, idle)
+
     async def _loop(self):
+        last_prune = time.monotonic()
         try:
             while True:
+                if time.monotonic() - last_prune > PRUNE_EVERY_SEC:
+                    self._prune()
+                    last_prune = time.monotonic()
                 batch = await self.consumer.getmany(timeout_ms=1000, max_records=500)
                 if not batch:
                     continue
@@ -101,4 +120,5 @@ class RULInferenceService:
 
     def status(self) -> dict:
         return {"running": bool(self.task and not self.task.done()), "started": self.started,
-                "saved_since_start": self.saved, "error": self.error}
+                "saved_since_start": self.saved, "error": self.error,
+                "tracked_engines": self.predictor.tracked() if self.predictor and hasattr(self.predictor, "tracked") else 0}

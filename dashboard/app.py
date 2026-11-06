@@ -10,7 +10,8 @@ import requests
 import streamlit as st
 
 from charts import fleet_bar, gauge, history_fig
-from logic import STATUS_LABEL, cycles_to_hours, history_to_df, latest_to_df
+from logic import (LABEL_TO_STATUS, STATUS_LABEL, cycles_to_hours, filter_df, format_age,
+                   history_to_df, latest_to_df)
 
 st.set_page_config(page_title="Smart Factory PdM", page_icon="🏭", layout="wide")
 API_DEFAULT = os.getenv("PDM_API_URL", "http://localhost:8000")
@@ -57,7 +58,6 @@ def show_critical_dialog(crit_alerts):
         st.rerun()
 #========================================알림 추가=====
 
-
 # ---------------------------------------------------------------- API 호출
 def api(base, method, path, **kw):
     try:
@@ -89,9 +89,8 @@ with st.sidebar:
     base = st.text_input("API 주소", API_DEFAULT).rstrip("/")
 
     st.subheader("데이터 리플레이")
-    st.selectbox("데이터", ["cycle"], format_func=lambda k: "C-MAPSS FD001 (엔진 100대)",
+    st.selectbox("데이터", ["cycle"], format_func=lambda k: "C-MAPSS FD001 (test 엔진)",
                  help="IMS/CWRU 진동 리플레이는 진동 처리 워커 구현 후 추가됩니다.")
-
     speed = st.select_slider("재생 속도", options=["느림", "보통", "빠름"], value="보통",
                              help="느림 0.2초 / 보통 0.05초 / 빠름 0.005초 (메시지 간격)")
     interval = {"느림": 0.2, "보통": 0.05, "빠름": 0.005}[speed]
@@ -106,7 +105,7 @@ with st.sidebar:
         st.error(err) if err else st.info("중지했습니다.")
 
     with st.expander("DB 초기화"):
-        ok = st.checkbox("저장된 예측을 모두 삭제합니다")
+        ok = st.checkbox("저장된 예측과 알림을 모두 삭제합니다")
         if st.button("초기화 실행", disabled=not ok):
             res, err = api(base, "POST", "/api/v1/replay/reset", params={"confirm": "true"})
             st.error(err) if err else st.success("초기화했습니다.")
@@ -115,17 +114,21 @@ with st.sidebar:
     warn = float(cfg["warn"]) if cfg else 60.0
     crit = float(cfg["crit"]) if cfg else 30.0
     hys = float(cfg["hysteresis"]) if cfg else 5.0
-    st.subheader("알림 기준 Health Index (서버 설정)")
-    st.caption(f"🟠 주의: {warn:g} 미만\n\n🔴 긴급: {crit:g} 미만\n\n회복 판정: 기준 +{hys:g} 이상 (알림 반복 방지)")
+    st.subheader("알림 기준 (서버 설정)")
+    st.caption(f"🟠 주의: Health Index {warn:g} 미만\n\n🔴 긴급: {crit:g} 미만\n\n회복 판정: 기준 +{hys:g} 이상 (알림 반복 방지)")
+
+    stale_after = st.slider("데이터 끊김 판정 (초)", 10, 3600, 120, step=10,
+                            help="마지막 수신 후 이 시간이 지나면 '끊김'(회색)으로 표시합니다. "
+                                 "리플레이가 끝나면 새 데이터가 오지 않으므로 시간이 지나면 모든 엔진이 끊김이 됩니다.")
     hpc = st.number_input("1 사이클 = N 시간 (가정값)", min_value=0.1, max_value=1000.0, value=1.0, step=0.5,
                           help="C-MAPSS에는 실제 시간이 없어 화면 표시용 가정값입니다.")
 
     st.subheader("새로고침")
-    auto = st.toggle("자동 새로고침", value=False)
-    every = st.slider("주기(초)", 5, 30)
+    auto = st.toggle("자동 새로고침", value=True)
+    every = st.slider("주기(초)", 2, 30, 5)
 
 
-# ----------------------------------------------------- 본문-----------------------
+# ---------------------------------------------------------------- 본문
 st.title("🏭 Smart Factory PdM 관제")
 
 
@@ -168,69 +171,85 @@ def render():
                     st.session_state.popup_shown = True
                     show_critical_dialog(crit_alerts)
             #======================================
+
         elif nw:
             st.warning(f"⚠️ 미확인 주의 알림 {nw}건 — '알림' 탭에서 확인하세요.")
-            # =================================================
-            res_warn, _ = api(base, "GET", "/api/v1/alerts", params={"limit": 3, "unacked_only": "true"})
-            if res_warn and res_warn.get("data"):
-                warn_alerts = [a for a in res_warn["data"] if a["level"] == "warning"]
-                
-                # 이전 갱신 때와 개수가 다르거나 처음 뜰 때만 토스트 출력
-                if warn_alerts and st.session_state.get("last_warn_count", 0) != len(warn_alerts):
-                    st.session_state.last_warn_count = len(warn_alerts)
-                    for w in warn_alerts[:2]:
-                        st.toast(f"⚠️ [주의] {w['asset_id']} ({w['cycle']}사이클) 점검 계획 필요", icon="🟠")
-            #=================================================
 
     tab_rul, tab_alert, tab_vib, tab_sys = st.tabs(["설비 RUL · Health Index", "알림", "진동 · FFT (준비 중)", "시스템"])
 
     with tab_rul:
         latest, err = api(base, "GET", "/api/v1/rul/latest")
+        warm, _ = api(base, "GET", "/api/v1/rul/warmup")          # 구버전 서버면 None
         if err:
             st.error(err)
         else:
-            df = latest_to_df(latest["data"], warn, crit)
-            if df.empty:
-                st.info("아직 저장된 예측이 없습니다. 사이드바에서 리플레이를 시작하세요. "
-                        "(엔진마다 처음 29 사이클은 윈도우를 채우는 중이라 예측이 나오지 않습니다.)")
+            df = latest_to_df(latest["data"], warn, crit, stale_after)
+            nwarm = warm["count"] if warm else 0
+            if df.empty and not nwarm:
+                st.info("아직 저장된 예측이 없습니다. 사이드바에서 리플레이를 시작하세요.")
             else:
-                n = df["status"].value_counts()
-                a, b, c, d = st.columns(4)
+                n = df["status"].value_counts() if not df.empty else {}
+                active = df[df["status"] != "stale"] if not df.empty else df
+                a, b, c, d, e, f = st.columns(6)
                 a.metric(f"🔴 {STATUS_LABEL['danger']}", int(n.get("danger", 0)))
                 b.metric(f"🟠 {STATUS_LABEL['warning']}", int(n.get("warning", 0)))
                 c.metric(f"🟢 {STATUS_LABEL['ok']}", int(n.get("ok", 0)))
-                d.metric("평균 Health Index", f"{df['health_index'].mean():.1f}")
+                d.metric(f"⚫ {STATUS_LABEL['stale']}", int(n.get("stale", 0)), help="설정한 시간 동안 데이터가 오지 않은 엔진")
+                e.metric("⏳ 수집 중", nwarm, help="윈도우(30사이클)를 채우는 중이라 아직 예측이 없는 엔진")
+                f.metric("평균 Health Index", f"{active['health_index'].mean():.1f}" if len(active) else "-")
 
-                st.plotly_chart(fleet_bar(df, warn, crit))
+                if nwarm:
+                    with st.expander(f"⏳ 수집 중인 엔진 {nwarm}대 (예측 시작 전)"):
+                        win = warm["window"]
+                        for w in warm["engines"][:12]:
+                            st.progress(min(w["filled"] / win, 1.0), text=f"{w['asset_id']}  {w['filled']}/{win}")
+                        if nwarm > 12:
+                            st.caption(f"…외 {nwarm - 12}대")
 
-                danger = df[df["status"] == "danger"]
-                if not danger.empty:
-                    st.subheader("🔴 위험 엔진")
-                    show = danger[["asset_id", "cycle", "rul_pred", "health_index"]].rename(
-                        columns={"asset_id": "엔진", "cycle": "사이클", "rul_pred": "예측 RUL(사이클)", "health_index": "Health Index"})
-                    show_table(show)
+                if not df.empty:
+                    f1, f2, f3 = st.columns([2, 2, 3])
+                    all_labels = list(STATUS_LABEL.values())
+                    sel_labels = f1.multiselect("상태 필터", all_labels, default=all_labels, key="f_status")
+                    query = f2.text_input("엔진 검색", key="f_query", placeholder="예: 034")
+                    view = filter_df(df, [LABEL_TO_STATUS[x] for x in sel_labels], query)
 
-                st.divider()
-                ids = sorted(df["asset_id"])
-                sel = st.selectbox("엔진 선택", ids, index=ids.index(df.iloc[0]["asset_id"]), key="engine")
-                row = df[df["asset_id"] == sel].iloc[0]
-                left, right = st.columns([1, 2])
-                with left:
-                    st.plotly_chart(gauge(row["health_index"], warn, crit))
-                    st.metric("예측 RUL", f"{row['rul_pred']:.0f} 사이클")
-                    st.caption(f"≈ {cycles_to_hours(row['rul_pred'], hpc):.0f} 시간 (가정: 1사이클 = {hpc}시간)")
-                    if pd.notna(row.get("rul_true")):
-                        st.metric("실제 RUL (데모용 정답)", f"{row['rul_true']:.0f} 사이클")
-                with right:
-                    hist, err = api(base, "GET", f"/api/v1/rul/history/{sel}", params={"limit": 200})
-                    if err:
-                        st.error(err)
+                    if view.empty:
+                        st.info("조건에 맞는 엔진이 없습니다.")
                     else:
-                        hdf = history_to_df(hist["data"])
-                        if hdf.empty:
-                            st.info("이력이 없습니다.")
-                        else:
-                            st.plotly_chart(history_fig(hdf, sel, warn, crit), use_container_width=True)
+                        topn = int(f3.number_input("그래프에 표시할 엔진 수 (위험한 순)", min_value=10, max_value=1000,
+                                                   value=100, step=10, key="f_topn"))
+                        st.plotly_chart(fleet_bar(view.head(topn), warn, crit, total=len(view)))
+
+                        danger = view[view["status"] == "danger"]
+                        if not danger.empty:
+                            st.subheader(f"🔴 위험 엔진 ({len(danger)}대)")
+                            show = danger[["asset_id", "cycle", "rul_pred", "health_index"]].head(50).rename(
+                                columns={"asset_id": "엔진", "cycle": "사이클", "rul_pred": "예측 RUL(사이클)", "health_index": "Health Index"})
+                            show_table(show)
+
+                        st.divider()
+                        ids = sorted(view["asset_id"])
+                        sel = st.selectbox("엔진 선택", ids, index=ids.index(view.iloc[0]["asset_id"]), key="engine")
+                        row = view[view["asset_id"] == sel].iloc[0]
+                        if row["status"] == "stale":
+                            st.warning(f"⚫ 데이터 끊김: 마지막 수신 {format_age(row.get('age_sec'))} 전 — 아래 값은 마지막으로 받은 시점의 값입니다.")
+                        left, right = st.columns([1, 2])
+                        with left:
+                            st.plotly_chart(gauge(row["health_index"], warn, crit))
+                            st.metric("예측 RUL", f"{row['rul_pred']:.0f} 사이클")
+                            st.caption(f"≈ {cycles_to_hours(row['rul_pred'], hpc):.0f} 시간 (가정: 1사이클 = {hpc}시간)")
+                            if pd.notna(row.get("rul_true")):
+                                st.metric("실제 RUL (데모용 정답)", f"{row['rul_true']:.0f} 사이클")
+                        with right:
+                            hist, err = api(base, "GET", f"/api/v1/rul/history/{sel}", params={"limit": 200})
+                            if err:
+                                st.error(err)
+                            else:
+                                hdf = history_to_df(hist["data"])
+                                if hdf.empty:
+                                    st.info("이력이 없습니다.")
+                                else:
+                                    st.plotly_chart(history_fig(hdf, sel, warn, crit))
 
     with tab_alert:
         if not asum:

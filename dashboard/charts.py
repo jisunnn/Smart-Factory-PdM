@@ -2,10 +2,10 @@
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-COLOR = {"danger": "#d62728", "warning": "#ff9f1c", "ok": "#2ca02c"}
+COLOR = {"danger": "#d62728", "warning": "#ff9f1c", "ok": "#2ca02c", "stale": "#9e9e9e"}
 
 
-def fleet_bar(df, warn, crit):
+def fleet_bar(df, warn, crit, total=None):
     """전체 엔진 Health Index 막대 (낮은 순)."""
     fig = go.Figure(go.Bar(
         x=df["asset_id"], y=df["health_index"],
@@ -19,7 +19,7 @@ def fleet_bar(df, warn, crit):
         height=320, margin=dict(l=10, r=10, t=10, b=10), showlegend=False,
         yaxis=dict(range=[0, 100], title="Health Index"),
         xaxis=dict(categoryorder="array", categoryarray=df["asset_id"].tolist(),
-                   showticklabels=False, title=f"엔진 {len(df)}대 (Health Index 낮은 순)"),
+                   showticklabels=False, title=(f"표시 {len(df)}대" + (f" / 전체 {total}대" if total and total > len(df) else "") + " (Health Index 낮은 순, 회색=데이터 끊김)")),
     )
     return fig
 
