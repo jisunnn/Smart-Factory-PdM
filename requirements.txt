@@ -30,3 +30,5 @@ python-dotenv==1.0.1
 streamlit>=1.37 
 plotly
 requests
+
+pyarrow<16
