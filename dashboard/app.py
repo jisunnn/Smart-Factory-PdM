@@ -14,6 +14,7 @@ from charts import fleet_bar, gauge, history_fig, spectrogram_fig, spectrum_fig,
 from logic import (LABEL_TO_STATUS, STATUS_LABEL, alert_where, cycles_to_hours, filter_df, format_age,
                    history_to_df, latest_to_df, spectra_to_arrays, vib_history_to_df, vib_latest_to_df)
 
+
 st.set_page_config(page_title="Smart Factory PdM", page_icon="🏭", layout="wide")
 API_DEFAULT = os.getenv("PDM_API_URL", "http://localhost:8000")
 
@@ -86,6 +87,11 @@ def get_cached_api_get(base_url, path):
 def get_cached_history(base_url, path, limit_val):
     res, err = api(base_url, "GET", path, params={"limit": limit_val})
     return res, err
+
+@st.cache_data(ttl=30, show_spinner=False)  # 진동 데이터는 조금 무거우니 ttl을 30초~1분 정도로
+def get_cached_spectrum(base_url, bearing_id, limit_count):
+    res, err = api(base_url, "GET", f"/api/v1/vib/spectrum/{bearing_id}", params={"limit": limit_count})
+    return res, err
 #-------------------------===================================
 
 
@@ -95,13 +101,84 @@ def show_table(df):
         st.dataframe(df, hide_index=True)
     except ImportError:
         st.markdown(df.to_html(index=False, border=0, float_format=lambda v: f"{v:.1f}"), unsafe_allow_html=True)
+# --------------------------------------------------------------------------
+
+#-------엔진 health_index 그래프 함수----------------------------------------------------------
+@st.fragment
+def health_index_show(df):
+    if not df.empty:                  
+        all_labels = list(STATUS_LABEL.values())
+        
+        # 1. 상태 필터만 나오게
+        sel_labels = st.multiselect("상태 필터", all_labels, default=all_labels, key="f_status")
+
+        # 2. 화면엔 안 보이지만 기존 로직 유지를 위한 숨김 값 (검색어 없음, 상위 100대 고정)
+        query = "" 
+        topn = 100
+
+        # 엔진 검색 기능 및 엔진 수 조절이 필요할 경우
+        #f1, f2, f3 = st.columns([2, 2, 3])
+        #all_labels = list(STATUS_LABEL.values())
+        #sel_labels = f1.multiselect("상태 필터", all_labels, default=all_labels, key="f_status")
+        #query = f2.text_input("엔진 검색", key="f_query", placeholder="예: 034")
+        view = filter_df(df, [LABEL_TO_STATUS[x] for x in sel_labels], query)
+
+        if view.empty:
+            st.info("조건에 맞는 엔진이 없습니다.")
+            return view
+        else:
+            #topn = int(f3.number_input("그래프에 표시할 엔진 수 (위험한 순)", min_value=10, max_value=100,
+            #                           value=100, step=10, key="f_topn"))
+            st.plotly_chart(fleet_bar(view.head(topn), warn, crit, total=len(view)))
+
+            danger = view[view["status"] == "danger"]
+            if not danger.empty:
+                st.subheader(f"🔴 위험 엔진 ({len(danger)}대)")
+                show = danger[["asset_id", "cycle", "rul_pred", "health_index"]].head(50).rename(
+                    columns={"asset_id": "엔진", "cycle": "사이클", "rul_pred": "예측 RUL(사이클)", "health_index": "Health Index"})
+                show_table(show)
+            return view
+                       
+
+
+#--------각 엔진 상세 조회 함수------
+@st.fragment
+def engine_status_show(view):
+    if view.empty:
+        st.info("조건에 맞는 엔진이 없습니다.")
+        return
+    else:
+        st.divider()
+        ids = sorted(view["asset_id"])
+        sel = st.selectbox("엔진 선택", ids, index=ids.index(view.iloc[0]["asset_id"]), key="engine")
+                                
+        row = view[view["asset_id"] == sel].iloc[0]
+        if row["status"] == "stale":
+            st.warning(f"⚫ 데이터 끊김: 마지막 수신 {format_age(row.get('age_sec'))} 전 — 아래 값은 마지막으로 받은 시점의 값입니다.")
+        left, right = st.columns([1, 2])
+        with left:
+            st.plotly_chart(gauge(row["health_index"], warn, crit), use_container_width=True, config={"displayModeBar": False})
+            st.metric("예측 RUL", f"{row['rul_pred']:.0f} 사이클")
+            st.caption(f"≈ {cycles_to_hours(row['rul_pred'], hpc):.0f} 시간 (가정: 1사이클 = {hpc}시간)")
+            if pd.notna(row.get("rul_true")):
+                st.metric("실제 RUL (데모용 정답)", f"{row['rul_true']:.0f} 사이클")
+        with right:
+            hist, err = get_cached_history(base, f"/api/v1/rul/history/{sel}", 100)
+            if err:
+                st.error(err)
+            else:
+                hdf = history_to_df(hist["data"])
+                if hdf.empty:
+                    st.info("이력이 없습니다.")
+                else:
+                    st.plotly_chart(history_fig(hdf, sel, warn, crit), use_container_width=True, config={"displayModeBar": False, "scrollZoom": False})
 
 
 # ---------------------------------------------------------------- 사이드바
 with st.sidebar:
     st.header("설정")
     base = st.text_input("API 주소", API_DEFAULT).rstrip("/")
-
+    
     st.subheader("데이터 리플레이")
     kind = st.selectbox("데이터", ["cycle", "vibration"],
                         format_func=lambda k: {"cycle": "C-MAPSS FD001 (엔진 RUL)", "vibration": "IMS Set 2 (베어링 4개 진동)"}[k],
@@ -135,7 +212,9 @@ with st.sidebar:
             else:
                 st.success("초기화했습니다.")
 
-    cfg, _ = api(base, "GET", "/api/v1/alerts/config")
+    #cfg, _ = api(base, "GET", "/api/v1/alerts/config")
+    cfg, _ = get_cached_api_get(base, "/api/v1/alerts/config")
+
     warn = float(cfg["warn"]) if cfg else 60.0
     crit = float(cfg["crit"]) if cfg else 30.0
     hys = float(cfg["hysteresis"]) if cfg else 5.0
@@ -204,6 +283,22 @@ def render():
             st.warning(f"⚠️ 미확인 주의 알림 {nw}건 — '알림' 탭에서 확인하세요.")
 
     tab_rul, tab_alert, tab_vib, tab_sys = st.tabs(["설비 RUL · Health Index", "알림", "진동 · FFT", "시스템"])
+    #selected_page = st.sidebar.radio("메뉴", ["설비 RUL · Health Index", "알림", "진동 · FFT", "시스템"], 
+    #                                 horizontal=True,  # 👈 핵심: 가로로 나열되도록 설정
+    #                                label_visibility="collapsed"  # 라벨 텍스트 숨기기 (깔끔하게 보이기 위함)
+    #                                )
+
+    #if selected_page == "설비 RUL · Health Index":
+    #    rul_page(warn, crit, stale_after, hpc)
+    #elif selected_page == "알림":
+    #    alert_page(asum, aerr)
+    #elif selected_page == "진동 · FFT":
+    #    vib_page(warn, crit, stale_after) 
+    #elif selected_page == "시스템":
+    #    sys_page(summary)
+
+
+
 
     with tab_rul:
         latest, err = api(base, "GET", "/api/v1/rul/latest")
@@ -234,50 +329,14 @@ def render():
                         if nwarm > 12:
                             st.caption(f"…외 {nwarm - 12}대")
 
-                if not df.empty:
-                    f1, f2, f3 = st.columns([2, 2, 3])
-                    all_labels = list(STATUS_LABEL.values())
-                    sel_labels = f1.multiselect("상태 필터", all_labels, default=all_labels, key="f_status")
-                    query = f2.text_input("엔진 검색", key="f_query", placeholder="예: 034")
-                    view = filter_df(df, [LABEL_TO_STATUS[x] for x in sel_labels], query)
+                # 엔진 health_index 그래프 조회 함수
+                view = health_index_show(df)
+                
+                 # 엔진 상세 조회 그래프 함수
+                engine_status_show(view)
 
-                    if view.empty:
-                        st.info("조건에 맞는 엔진이 없습니다.")
-                    else:
-                        topn = int(f3.number_input("그래프에 표시할 엔진 수 (위험한 순)", min_value=10, max_value=1000,
-                                                   value=100, step=10, key="f_topn"))
-                        st.plotly_chart(fleet_bar(view.head(topn), warn, crit, total=len(view)))
-
-                        danger = view[view["status"] == "danger"]
-                        if not danger.empty:
-                            st.subheader(f"🔴 위험 엔진 ({len(danger)}대)")
-                            show = danger[["asset_id", "cycle", "rul_pred", "health_index"]].head(50).rename(
-                                columns={"asset_id": "엔진", "cycle": "사이클", "rul_pred": "예측 RUL(사이클)", "health_index": "Health Index"})
-                            show_table(show)
-
-                        st.divider()
-                        ids = sorted(view["asset_id"])
-                        sel = st.selectbox("엔진 선택", ids, index=ids.index(view.iloc[0]["asset_id"]), key="engine")
-                        row = view[view["asset_id"] == sel].iloc[0]
-                        if row["status"] == "stale":
-                            st.warning(f"⚫ 데이터 끊김: 마지막 수신 {format_age(row.get('age_sec'))} 전 — 아래 값은 마지막으로 받은 시점의 값입니다.")
-                        left, right = st.columns([1, 2])
-                        with left:
-                            st.plotly_chart(gauge(row["health_index"], warn, crit))
-                            st.metric("예측 RUL", f"{row['rul_pred']:.0f} 사이클")
-                            st.caption(f"≈ {cycles_to_hours(row['rul_pred'], hpc):.0f} 시간 (가정: 1사이클 = {hpc}시간)")
-                            if pd.notna(row.get("rul_true")):
-                                st.metric("실제 RUL (데모용 정답)", f"{row['rul_true']:.0f} 사이클")
-                        with right:
-                            hist, err = get_cached_history(base, f"/api/v1/rul/history/{sel}", 100)
-                            if err:
-                                st.error(err)
-                            else:
-                                hdf = history_to_df(hist["data"])
-                                if hdf.empty:
-                                    st.info("이력이 없습니다.")
-                                else:
-                                    st.plotly_chart(history_fig(hdf, sel, warn, crit))
+                
+                        
 
     with tab_alert:
         if not asum:
@@ -308,8 +367,8 @@ def render():
                         st.rerun()
 
     with tab_vib:
-        vcfg, _ = api(base, "GET", "/api/v1/vib/config")
-        vlat, verr = api(base, "GET", "/api/v1/vib/latest")
+        vcfg, _ = get_cached_api_get(base, "/api/v1/vib/config")
+        vlat, verr = get_cached_api_get(base, "/api/v1/vib/latest")
         vdf = vib_latest_to_df(vlat["data"], warn, crit, stale_after) if vlat else pd.DataFrame()
         if verr:
             st.error(verr)
@@ -345,7 +404,7 @@ def render():
             bsel = st.selectbox("베어링 선택", [int(b) for b in vdf["bearing"]], key="vib_bearing", format_func=lambda b: f"베어링 {b}")
             nfiles = st.slider("스펙트로그램에 쓸 최근 파일 수", 30, 600, 150, step=30, key="vib_nfiles",
                                help="파일 1개 = 1초 파형 (10분 간격 기록). 150개 ≈ 25시간")
-            sp, serr = api(base, "GET", f"/api/v1/vib/spectrum/{bsel}", params={"limit": nfiles})
+            sp, serr = get_cached_spectrum(base, bsel, nfiles)  # 캐시 적용된 api 호출
             fault = (vcfg or {}).get("fault_hz") or {}
             step = (sp or {}).get("step_hz", 2)
             arr = spectra_to_arrays(sp["data"], step) if sp else None
