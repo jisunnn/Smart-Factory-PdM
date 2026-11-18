@@ -5,13 +5,14 @@
 """
 import os
 
+import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
 
-from charts import fleet_bar, gauge, history_fig
-from logic import (LABEL_TO_STATUS, STATUS_LABEL, cycles_to_hours, filter_df, format_age,
-                   history_to_df, latest_to_df)
+from charts import fleet_bar, gauge, history_fig, spectrogram_fig, spectrum_fig, vib_hi_fig
+from logic import (LABEL_TO_STATUS, STATUS_LABEL, alert_where, cycles_to_hours, filter_df, format_age,
+                   history_to_df, latest_to_df, spectra_to_arrays, vib_history_to_df, vib_latest_to_df)
 
 st.set_page_config(page_title="Smart Factory PdM", page_icon="🏭", layout="wide")
 API_DEFAULT = os.getenv("PDM_API_URL", "http://localhost:8000")
@@ -75,6 +76,19 @@ def api(base, method, path, **kw):
         return None, str(e)
 
 
+# ===================================================== 캐시가 적용된 데이터 조회 함수들 추가==============
+@st.cache_data(ttl=5)  # 5초 동안은 동일한 경로의 GET 요청 결과를 캐시, ui에 안보이게 하기 옵션 : show_spinner=False 
+def get_cached_api_get(base_url, path):
+    res, err = api(base_url, "GET", path)
+    return res, err
+
+@st.cache_data(ttl=10)
+def get_cached_history(base_url, path, limit_val):
+    res, err = api(base_url, "GET", path, params={"limit": limit_val})
+    return res, err
+#-------------------------===================================
+
+
 def show_table(df):
     """표 출력. pyarrow 가 깨진 환경에서는 HTML 표로 대체한다 (st.dataframe 은 pyarrow 필요)."""
     try:
@@ -89,26 +103,37 @@ with st.sidebar:
     base = st.text_input("API 주소", API_DEFAULT).rstrip("/")
 
     st.subheader("데이터 리플레이")
-    st.selectbox("데이터", ["cycle"], format_func=lambda k: "C-MAPSS FD001 (test 엔진)",
-                 help="IMS/CWRU 진동 리플레이는 진동 처리 워커 구현 후 추가됩니다.")
+    kind = st.selectbox("데이터", ["cycle", "vibration"],
+                        format_func=lambda k: {"cycle": "C-MAPSS FD001 (엔진 RUL)", "vibration": "IMS Set 2 (베어링 4개 진동)"}[k],
+                        help="IMS: 파일 984개 x 베어링 4개 = 3,936건. 속도 '보통'이면 약 3분 걸립니다.")
     speed = st.select_slider("재생 속도", options=["느림", "보통", "빠름"], value="보통",
                              help="느림 0.2초 / 보통 0.05초 / 빠름 0.005초 (메시지 간격)")
     interval = {"느림": 0.2, "보통": 0.05, "빠름": 0.005}[speed]
     loop = st.checkbox("끝나면 처음부터 반복")
 
+   
     c1, c2 = st.columns(2)
     if c1.button("▶ 시작"):
-        res, err = api(base, "POST", "/api/v1/replay/start", json={"kind": "cycle", "interval": interval, "loop": loop})
-        st.error(err) if err else st.success("리플레이를 시작했습니다.")
+        res, err = api(base, "POST", "/api/v1/replay/start", json={"kind": kind, "interval": interval, "loop": loop})
+        if err:
+            st.error(err)
+        else:
+            st.success("리플레이를 시작했습니다.")
     if c2.button("■ 중지"):
         res, err = api(base, "POST", "/api/v1/replay/stop")
-        st.error(err) if err else st.info("중지했습니다.")
+        if err:
+            st.error(err)
+        else:
+            st.info("중지했습니다.")
 
     with st.expander("DB 초기화"):
         ok = st.checkbox("저장된 예측과 알림을 모두 삭제합니다")
         if st.button("초기화 실행", disabled=not ok):
             res, err = api(base, "POST", "/api/v1/replay/reset", params={"confirm": "true"})
-            st.error(err) if err else st.success("초기화했습니다.")
+            if err:
+                st.error(err)  
+            else:
+                st.success("초기화했습니다.")
 
     cfg, _ = api(base, "GET", "/api/v1/alerts/config")
     warn = float(cfg["warn"]) if cfg else 60.0
@@ -133,17 +158,20 @@ st.title("🏭 Smart Factory PdM 관제")
 
 
 def render():
-    summary, err = api(base, "GET", "/api/v1/rul/summary")
+    summary, err = get_cached_api_get(base, "/api/v1/rul/summary")
     if err:
         st.error(err)
         return
     rep, svc = summary["replay"], summary["rul_service"]
 
-    m1, m2, m3, m4 = st.columns(4)
+    vsum, _ = get_cached_api_get(base, "/api/v1/vib/summary")           # 구버전 서버면 None
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("저장된 예측", f"{summary['rows']:,}")
     m2.metric("관측 엔진", f"{summary['engines']}")
     m3.metric("리플레이", rep.get("status", "-"))
     m4.metric("RUL 추론 서비스", "실행 중" if svc.get("running") else "중지")
+    vs = (vsum or {}).get("vib_service") or {}
+    m5.metric("진동 추론 서비스", "-" if not vsum else ("실행 중" if vs.get("running") else "중지"))
     if rep.get("total"):
         st.progress(min(rep["sent"] / rep["total"], 1.0), text=f"리플레이 {rep['sent']:,} / {rep['total']:,}")
     if svc.get("error"):
@@ -151,12 +179,12 @@ def render():
     if rep.get("error"):
         st.warning(f"리플레이 오류: {rep['error']}")
 
-    asum, aerr = api(base, "GET", "/api/v1/alerts/summary")
+    asum, aerr = api(base, "GET" ,"/api/v1/alerts/summary")
     if asum:
         nc, nw = asum["critical"]["unacked"], asum["warning"]["unacked"]
         if nc:
             st.error(f"🚨 미확인 긴급 알림 {nc}건 (주의 {nw}건) — '알림' 탭에서 확인하세요.")
-            #===============================
+            #====================알림===========
             res_crit, _ = api(base, "GET", "/api/v1/alerts", params={
                 "limit": 10, 
                 "unacked_only": "true", 
@@ -171,11 +199,11 @@ def render():
                     st.session_state.popup_shown = True
                     show_critical_dialog(crit_alerts)
             #======================================
-
+            
         elif nw:
             st.warning(f"⚠️ 미확인 주의 알림 {nw}건 — '알림' 탭에서 확인하세요.")
 
-    tab_rul, tab_alert, tab_vib, tab_sys = st.tabs(["설비 RUL · Health Index", "알림", "진동 · FFT (준비 중)", "시스템"])
+    tab_rul, tab_alert, tab_vib, tab_sys = st.tabs(["설비 RUL · Health Index", "알림", "진동 · FFT", "시스템"])
 
     with tab_rul:
         latest, err = api(base, "GET", "/api/v1/rul/latest")
@@ -241,7 +269,7 @@ def render():
                             if pd.notna(row.get("rul_true")):
                                 st.metric("실제 RUL (데모용 정답)", f"{row['rul_true']:.0f} 사이클")
                         with right:
-                            hist, err = api(base, "GET", f"/api/v1/rul/history/{sel}", params={"limit": 200})
+                            hist, err = get_cached_history(base, f"/api/v1/rul/history/{sel}", 100)
                             if err:
                                 st.error(err)
                             else:
@@ -271,7 +299,7 @@ def render():
                 for a in res["data"]:
                     c = st.columns([1.1, 1.6, 6, 1.2])
                     c[0].write("🔴 긴급" if a["level"] == "critical" else "🟠 주의")
-                    c[1].write(f"{a['asset_id']} · {a['cycle']}사이클")
+                    c[1].write(alert_where(a))
                     c[2].write(a["message"])
                     if a["acknowledged"]:
                         c[3].caption("확인됨")
@@ -280,11 +308,69 @@ def render():
                         st.rerun()
 
     with tab_vib:
-        st.info("아직 구현 전입니다. 진동 처리 워커(FFT·특징 추출·이상 점수)가 완성되면 이 탭에 다음이 들어갑니다.")
-        st.markdown(
-            "- 설비(베어링)별 **실시간 FFT 스펙트로그램** (시간 × 주파수)\n"
-            "- 결함 주파수(BPFO/BPFI) 표시선과 엔벨로프 스펙트럼\n"
-            "- 정상 이탈 점수(Autoencoder)와 진동 기반 Health Index")
+        vcfg, _ = api(base, "GET", "/api/v1/vib/config")
+        vlat, verr = api(base, "GET", "/api/v1/vib/latest")
+        vdf = vib_latest_to_df(vlat["data"], warn, crit, stale_after) if vlat else pd.DataFrame()
+        if verr:
+            st.error(verr)
+        elif vdf.empty:
+            st.info("아직 진동 데이터가 없습니다. 사이드바에서 데이터를 'IMS Set 2'로 선택하고 ▶ 시작을 누르세요.")
+        else:
+            icon = {"danger": "🔴", "warning": "🟠", "ok": "🟢", "stale": "⚫"}
+            cols = st.columns(len(vdf))
+            for col, (_, r) in zip(cols, vdf.iterrows()):
+                col.metric(f"{icon[r['status']]} 베어링 {int(r['bearing'])}", f"{r['health_index']:.1f}",
+                           help=f"이상 점수 비율 {r['ratio']:.2f} (1 이하면 정상 범위) · 경과 {r['elapsed_h']:.1f}시간 · 마지막 수신 {format_age(r.get('age_sec'))} 전")
+            sus_cols = st.columns(len(vdf))
+            for col, (_, r) in zip(sus_cols, vdf.iterrows()):
+                s = r.get("suspect")
+                if r["status"] == "stale":
+                    col.caption("데이터 끊김")
+                elif isinstance(s, dict):
+                    col.caption(f"🔍 의심 결함: **{s['label']}**" + (f" ({s['z']:+.1f}σ)" if s.get("z") is not None else ""))
+                else:
+                    col.caption("정상 범위")
+            series = {}
+            for b in vdf["bearing"]:
+                h, _ = get_cached_history(base, f"/api/v1/vib/history/{int(b)}", 700)
+                if h:
+                    hd = vib_history_to_df(h["data"])
+                    if not hd.empty:
+                        series[int(b)] = hd
+            st.subheader("베어링별 Health Index 추이")
+            if series:
+                st.plotly_chart(vib_hi_fig(series, warn, crit))
+
+            st.divider()
+            bsel = st.selectbox("베어링 선택", [int(b) for b in vdf["bearing"]], key="vib_bearing", format_func=lambda b: f"베어링 {b}")
+            nfiles = st.slider("스펙트로그램에 쓸 최근 파일 수", 30, 600, 150, step=30, key="vib_nfiles",
+                               help="파일 1개 = 1초 파형 (10분 간격 기록). 150개 ≈ 25시간")
+            sp, serr = api(base, "GET", f"/api/v1/vib/spectrum/{bsel}", params={"limit": nfiles})
+            fault = (vcfg or {}).get("fault_hz") or {}
+            step = (sp or {}).get("step_hz", 2)
+            arr = spectra_to_arrays(sp["data"], step) if sp else None
+            if serr:
+                st.error(serr)
+            elif arr is None:
+                st.info("이 베어링의 스펙트럼이 아직 없습니다.")
+            else:
+                xs, freqs, Z = arr
+                left, right = st.columns(2)
+                with left:
+                    st.markdown("**엔벨로프 스펙트럼 (현재 vs 이전)**")
+                    ref = Z[:, 0] if Z.shape[1] > 1 else None
+                    st.plotly_chart(spectrum_fig(freqs, Z[:, -1], f"현재 ({xs[-1]:.0f}h)", ref, f"이전 ({xs[0]:.0f}h)", fault))
+                with right:
+                    st.markdown("**스펙트로그램 (시간 x 주파수)**")
+                    st.plotly_chart(spectrogram_fig(xs, freqs, Z, fault))
+                st.caption("점선 = 결함 주파수(BPFO 외륜, BPFI 내륜, BSF 볼, FTF 케이지). 결함이 진행되면 해당 주파수 부근의 진폭이 커집니다.")
+                cur = vdf[vdf["bearing"] == bsel].iloc[0]
+                z1, z2, z3 = st.columns(3)
+                z1.metric("외륜(BPFO) 피크", f"{cur['z_env_bpfo']:+.1f} σ", help="정상 구간 대비 표준편차 배수")
+                z2.metric("내륜(BPFI) 피크", f"{cur['z_env_bpfi']:+.1f} σ")
+                z3.metric("볼(BSF) 피크", f"{cur['z_env_bsf']:+.1f} σ")
+                st.caption("의심 결함은 규칙 기반 추정입니다: Health Index가 주의 기준 아래일 때, 세 결함 주파수 중 정상 대비 가장 크게 늘어난 것을 표시합니다. "
+                           "임계값(3σ 이상, 1위와 2위 차이 1.5σ 이상)은 검증 전 시작값이며, 이 데이터(IMS Set 2)에서 검증 가능한 결함은 외륜뿐입니다.")
 
     with tab_sys:
         st.json(summary)

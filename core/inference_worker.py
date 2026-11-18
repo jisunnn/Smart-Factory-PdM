@@ -50,6 +50,7 @@ async def handle_batch(batch, predictor, producer, db_pool, insert_fn, alert_eng
                 alert = alert_engine.evaluate(result["asset_id"], result.get("cycle"),
                                               result["health_index"], result["rul_pred"], result.get("ts"))
                 if alert:
+                    alert["source"] = result.get("source")
                     alerts.append(alert)
     if rows:
         await insert_fn(db_pool, rows)

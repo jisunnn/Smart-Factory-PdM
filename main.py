@@ -14,6 +14,10 @@ from api import replay as replay_api
 from api import rul as rul_api
 from api import alerts as alerts_api
 
+from core.vib_service import VibrationInferenceService
+from api import vib as vib_api
+
+
 # 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
@@ -27,6 +31,7 @@ consumer = SensorDataConsumer()
 
 replay_service = ReplayService()
 rul_service = RULInferenceService()
+vib_service = VibrationInferenceService()
 
 # 백그라운드 태스크는 참조를 보관해야 중간에 정리되지 않고, 종료 때 취소할 수 있다
 background_tasks: list[asyncio.Task] = []
@@ -64,6 +69,15 @@ async def lifespan(app: FastAPI):
                 rul_service.error = str(e)
                 logger.error(f"RUL 추론 서비스 시작 실패 (서버는 계속 실행됩니다): {e}")
 
+        # 4. (실제 데이터) 진동 추론 서비스 : 모델/파일 문제가 있어도 서버 전체는 뜨도록 보호
+        if getattr(settings, "ENABLE_VIB_SERVICE", True):
+            try:
+                await vib_service.start()
+            except Exception as e:
+                vib_service.error = str(e)
+                logger.error(f"진동 추론 서비스 시작 실패 (서버는 계속 실행됩니다): {e}")
+        
+        app.state.vib_service = vib_service 
         app.state.replay_service = replay_service
         app.state.rul_service = rul_service
 
@@ -84,6 +98,7 @@ async def lifespan(app: FastAPI):
     background_tasks.clear()
 
     await rul_service.stop()
+    await vib_service.stop()
     await replay_service.stop()
     await consumer.stop()
     await producer.stop()
@@ -100,6 +115,7 @@ app = FastAPI(
 
 app.include_router(replay_api.router)
 app.include_router(rul_api.router)
+app.include_router(vib_api.router)
 app.include_router(alerts_api.router)  
 
 
@@ -113,6 +129,7 @@ async def root():
         "virtual_data": settings.ENABLE_VIRTUAL_DATA,
         "rul_service": rul_service.status(),
         "replay": replay_service.status(),
+        "vib_service": vib_service.status(),
     }
 
 @app.get("/api/v1/sensors/latest") # 최신 데이터 요청 시 처리 데이터 던져줄 엔드포인트

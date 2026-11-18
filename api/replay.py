@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from models.alert_repository import init_alert_table
 from models.database import db_manager
+from models.vib_repository import init_vib_tables
 
 router = APIRouter(prefix="/api/v1/replay", tags=["replay"])
 
@@ -50,8 +51,13 @@ async def reset_predictions(request: Request, confirm: bool = False):
     if not db_manager.pool:
         raise HTTPException(status_code=503, detail="Database pool is not initialized")
     await init_alert_table(db_manager.pool)                  # 테이블이 없을 수 있으므로 보장
+    await init_vib_tables(db_manager.pool)
     async with db_manager.pool.acquire() as conn:
         await conn.execute("TRUNCATE rul_predictions")
         await conn.execute("TRUNCATE alerts")
+        await conn.execute("TRUNCATE vibration_scores, vibration_spectra")
     request.app.state.rul_service.alert_engine.reset()       # 엔진별 알림 단계도 초기화
+    vib = getattr(request.app.state, "vib_service", None)
+    if vib is not None:
+        vib.reset()                                          # 진동 평활 이력과 알림 단계 초기화
     return {"reset": True}

@@ -56,3 +56,42 @@ def history_fig(hdf, asset_id, warn=None, crit=None):
     fig.update_layout(height=430, margin=dict(l=10, r=10, t=30, b=10), title=f"{asset_id}",
                       legend=dict(orientation="h", y=1.08))
     return fig
+
+
+def vib_hi_fig(series, warn, crit):
+    """베어링별 Health Index 추이. series: {베어링번호: DataFrame(elapsed_h, health_index)}"""
+    fig = go.Figure()
+    for b, df in series.items():
+        fig.add_trace(go.Scatter(x=df["elapsed_h"], y=df["health_index"], mode="lines", name=f"베어링 {b}"))
+    fig.add_hline(y=warn, line_dash="dot", line_color=COLOR["warning"])
+    fig.add_hline(y=crit, line_dash="dot", line_color=COLOR["danger"])
+    fig.update_layout(height=340, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.1),
+                      yaxis=dict(range=[0, 105], title="Health Index"), xaxis=dict(title="elapsed (h)"))
+    return fig
+
+
+def spectrum_fig(freqs, cur, cur_label, ref=None, ref_label="", fault_hz=None):
+    """엔벨로프 스펙트럼 (현재 + 비교용 이전 스펙트럼) 과 결함 주파수 표시선."""
+    fig = go.Figure()
+    if ref is not None:
+        fig.add_trace(go.Scatter(x=freqs, y=ref, mode="lines", name=ref_label, line=dict(color="#9e9e9e", width=1)))
+    fig.add_trace(go.Scatter(x=freqs, y=cur, mode="lines", name=cur_label, line=dict(color=COLOR["danger"], width=2)))
+    for name, f0 in (fault_hz or {}).items():
+        if f0 <= float(freqs[-1]):
+            fig.add_vline(x=f0, line_dash="dot", line_color="#4c78a8", annotation_text=name, annotation_position="top")
+    fig.update_layout(height=340, margin=dict(l=10, r=10, t=30, b=10), legend=dict(orientation="h", y=1.12),
+                      xaxis=dict(title="주파수 (Hz)"), yaxis=dict(title="엔벨로프 진폭"))
+    return fig
+
+
+def spectrogram_fig(xs, freqs, Z, fault_hz=None):
+    """시간 x 주파수 스펙트로그램 (진폭은 log10 색상)."""
+    import numpy as np
+    fig = go.Figure(go.Heatmap(x=xs, y=freqs, z=np.log10(np.maximum(Z, 1e-6)), colorscale="Viridis",
+                               colorbar=dict(title="log10 진폭")))
+    for name, f0 in (fault_hz or {}).items():
+        if f0 <= float(freqs[-1]):
+            fig.add_hline(y=f0, line_dash="dot", line_color="white", annotation_text=name, annotation_position="right")
+    fig.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(title="elapsed (h)"),
+                      yaxis=dict(title="주파수 (Hz)"))
+    return fig

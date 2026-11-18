@@ -32,6 +32,7 @@ def iter_cycle_messages(data_dir, subset: str = "FD001"):
     d = Path(data_dir)
     test = pd.read_csv(d / f"test_{subset}.txt", sep=r"\s+", header=None, names=_COLS)
     rul_final = pd.read_csv(d / f"RUL_{subset}.txt", sep=r"\s+", header=None)[0].tolist()
+
     engines = {}
     for unit, g in test.groupby("unit"):
         engines[unit] = g.sort_values("cycle").to_dict("records")
@@ -76,9 +77,32 @@ def iter_vibration_messages(data_dir, channel: int = 0, chunk: int = 2048,
             }
 
 
+def _ims_dt(name: str) -> datetime:
+    y, mo, d, h, mi, s = map(int, re.findall(r"\d+", name)[:6])
+    return datetime(y, mo, d, h, mi, s)
+
+
+def iter_ims_waveforms(data_dir, fs: int = 20480):
+    """IMS 파일 1개(1초, 20,480샘플 x 4채널)를 베어링 1~4 메시지 4개로 나눠 파일 순서대로 내보낸다.
+    메시지 1개 ≈ 150KB (Kafka 기본 한도 1MB 이내). 샘플은 원본 값 그대로(반올림 없음)."""
+    files = sorted(p for p in Path(data_dir).iterdir() if p.is_file())
+    if not files:
+        raise ValueError(f"IMS 파일이 없습니다: {data_dir}")
+    t0 = _ims_dt(files[0].name)
+    for i, p in enumerate(files):
+        arr = pd.read_csv(p, sep="\t", header=None).values
+        elapsed = (_ims_dt(p.name) - t0).total_seconds() / 3600
+        for ch in range(arr.shape[1]):
+            yield {
+                "asset_id": f"ims_bearing_{ch + 1}", "bearing": ch + 1, "source": "ims_set2",
+                "file": p.name, "file_idx": i, "elapsed_h": elapsed, "ts": _now(), "fs": fs,
+                "samples": arr[:, ch].tolist(),
+            }
+
+
 async def replay(kind: str, data_dir: str, interval: float, loop_forever: bool):
     topic = settings.KAFKA_TOPIC_CYCLE_RAW if kind == "cycle" else settings.KAFKA_TOPIC_VIBRATION_RAW
-    gen_fn = iter_cycle_messages if kind == "cycle" else iter_vibration_messages
+    gen_fn = iter_cycle_messages if kind == "cycle" else iter_ims_waveforms
 
     producer = AIOKafkaProducer(
         bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,

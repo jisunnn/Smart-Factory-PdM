@@ -14,11 +14,11 @@ from pathlib import Path
 from aiokafka import AIOKafkaProducer
 
 from config.settings import settings
-from core.replay_producer import iter_cycle_messages, iter_vibration_messages
+from core.replay_producer import iter_cycle_messages, iter_ims_waveforms
 
 logger = logging.getLogger(__name__)
 
-VIB_CHUNKS_PER_FILE = 10      # 20,480샘플 / 2048
+IMS_CHANNELS = 4              # 파일 1개 = 베어링 4개 메시지
 
 
 class ReplayService:
@@ -56,7 +56,7 @@ class ReplayService:
         if kind == "cycle":
             return Path(settings.CMAPSS_DATA_DIR), settings.KAFKA_TOPIC_CYCLE_RAW, iter_cycle_messages
         if kind == "vibration":
-            return Path(settings.IMS_DATA_DIR), settings.KAFKA_TOPIC_VIBRATION_RAW, iter_vibration_messages
+            return Path(settings.IMS_DATA_DIR), settings.KAFKA_TOPIC_VIBRATION_RAW, iter_ims_waveforms
         raise ValueError(f"알 수 없는 kind: {kind}")
 
     @staticmethod
@@ -64,7 +64,7 @@ class ReplayService:
         if kind == "cycle":
             with open(data_dir / "test_FD001.txt", "rb") as f:
                 return sum(1 for line in f if line.strip())
-        return sum(1 for p in data_dir.iterdir() if p.is_file()) * VIB_CHUNKS_PER_FILE
+        return sum(1 for p in data_dir.iterdir() if p.is_file()) * IMS_CHANNELS
 
     async def begin(self, kind: str, interval: float, loop_forever: bool = False):
         if self.is_running():

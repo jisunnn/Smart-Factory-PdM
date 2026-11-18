@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     health_index    DOUBLE PRECISION,
     rul_pred        DOUBLE PRECISION,
     message         TEXT,
+    source          VARCHAR(50),
     acknowledged    BOOLEAN NOT NULL DEFAULT FALSE,
     acknowledged_at TIMESTAMPTZ
 );
@@ -26,15 +27,16 @@ CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_alerts_asset ON alerts (asset_id, time DESC);",
 ]
 INSERT_SQL = """
-INSERT INTO alerts (time, asset_id, level, cycle, health_index, rul_pred, message)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO alerts (time, asset_id, level, cycle, health_index, rul_pred, message, source)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 """
-COLUMNS = "id, time, asset_id, level, cycle, health_index, rul_pred, message, acknowledged, acknowledged_at"
+COLUMNS = "id, time, asset_id, level, cycle, health_index, rul_pred, message, source, acknowledged, acknowledged_at"
 
 
 async def init_alert_table(pool):
     async with pool.acquire() as conn:
         await conn.execute(CREATE_TABLE)
+        await conn.execute("ALTER TABLE alerts ADD COLUMN IF NOT EXISTS source VARCHAR(50)")   # 기존 테이블 보강
         for q in CREATE_INDEXES:
             await conn.execute(q)
     logger.info("alerts 테이블이 준비되었습니다.")
@@ -44,7 +46,7 @@ async def insert_alerts(pool, alerts: list[dict]) -> int:
     if not alerts:
         return 0
     records = [(_parse_ts(a.get("time")), a["asset_id"], a["level"], a.get("cycle"),
-                a.get("health_index"), a.get("rul_pred"), a.get("message")) for a in alerts]
+                a.get("health_index"), a.get("rul_pred"), a.get("message"), a.get("source")) for a in alerts]
     async with pool.acquire() as conn:
         await conn.executemany(INSERT_SQL, records)
     return len(records)

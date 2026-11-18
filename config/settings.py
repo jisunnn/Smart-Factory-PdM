@@ -34,6 +34,8 @@ class Settings:
     # 파이프라인 on/off
     ENABLE_VIRTUAL_DATA: bool = os.getenv("ENABLE_VIRTUAL_DATA", "true").lower() == "true"
     ENABLE_RUL_SERVICE: bool = os.getenv("ENABLE_RUL_SERVICE", "true").lower() == "true"
+    ENABLE_VIB_SERVICE: bool = os.getenv("ENABLE_VIB_SERVICE", "true").lower() == "true"
+
     # ML
     ML_ARTIFACT_DIR: Path = BASE_DIR / "ml" / "artifacts"
     RUL_MODEL_FILES: list = os.getenv("RUL_MODEL_FILES", "rul_cnn_bilstm_fd001.pt").split(",")
@@ -47,6 +49,10 @@ class Settings:
     ALERT_CRIT_HI: float = float(os.getenv("ALERT_CRIT_HI", "30"))
     ALERT_HYSTERESIS: float = float(os.getenv("ALERT_HYSTERESIS", "5"))
     KAFKA_TOPIC_ALERTS: str = os.getenv("KAFKA_TOPIC_ALERTS", "factory.alerts")
+
+    # 결함 기준 임계값 설정
+    FAULT_MIN_Z: float = float(os.getenv("FAULT_MIN_Z", "3.0"))
+    FAULT_MARGIN: float = float(os.getenv("FAULT_MARGIN", "1.5"))
 
     # 메모리 정리 기준 시간 (기준 시간 이상 데이터가 없는 엔진의 윈도우 버퍼와 알림 상태를 삭제)
     ENGINE_IDLE_PRUNE_SEC: int = int(os.getenv("ENGINE_IDLE_PRUNE_SEC", "3600"))

@@ -65,3 +65,42 @@ def history_to_df(data: list[dict]) -> pd.DataFrame:
 
 def cycles_to_hours(cycles: float, hours_per_cycle: float) -> float:
     return float(cycles) * float(hours_per_cycle)
+
+
+# ---------------------------------------------------------------- 진동(베어링)
+def vib_latest_to_df(data: list[dict], warn: float, crit: float, stale_after: float | None = None) -> pd.DataFrame:
+    """/api/v1/vib/latest 의 data → 상태(위험/주의/정상/끊김) 컬럼, 베어링 번호 순."""
+    df = pd.DataFrame(data)
+    if df.empty:
+        return df
+    for c in ("health_index", "ratio", "elapsed_h", "age_sec", "z_env_bpfo", "z_env_bpfi", "z_env_bsf"):
+        if c in df:
+            df[c] = pd.to_numeric(df[c])
+    df["status"] = np.select(
+        [df["health_index"] < crit, df["health_index"] < warn], ["danger", "warning"], default="ok")
+    if stale_after is not None and "age_sec" in df:
+        df.loc[df["age_sec"] > stale_after, "status"] = "stale"
+    return df.sort_values("bearing").reset_index(drop=True)
+
+
+def vib_history_to_df(data: list[dict]) -> pd.DataFrame:
+    df = pd.DataFrame(data)
+    if df.empty:
+        return df
+    for c in ("elapsed_h", "health_index", "ratio"):
+        df[c] = pd.to_numeric(df[c])
+    return df.sort_values("elapsed_h").reset_index(drop=True)
+
+
+def spectra_to_arrays(data: list[dict], step_hz: float):
+    """/api/v1/vib/spectrum 의 data → (시간축, 주파수축, 진폭 행렬[주파수 x 시간]). 데이터가 없으면 None."""
+    if not data:
+        return None
+    xs = [d["elapsed_h"] for d in data]
+    Z = np.array([d["spec"] for d in data], dtype=float).T
+    return xs, np.arange(Z.shape[0]) * float(step_hz), Z
+
+
+def alert_where(a: dict) -> str:
+    """알림 목록의 위치 표기: 진동은 '파일 N', RUL 은 'N사이클'."""
+    return f"{a['asset_id']} · " + (f"파일 {a['cycle']}" if a.get("source") == "ims_set2" else f"{a['cycle']}사이클")
