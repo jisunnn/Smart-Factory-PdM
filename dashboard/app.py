@@ -46,7 +46,7 @@ def critical_alert_dialog(base: str, critical_items: list[dict]):
                 st.caption(f"가동 사이클: {cycle}")
                 st.markdown(
                     f"Health Index : :red[**{hi}**] :gray[(기준 30 미만)]  \n"
-                    f"예상 잔여 사이클 : 약 :red[**{rul:.1f}**] "
+                    f"예상 잔여 사이클 : 약 :red[**{rul}**] "
                 )
                 
                 if st.button(
@@ -174,6 +174,7 @@ def engine_status_show(view):
 #-----설비 RUL · Health Index 탭 실행 함수--------------------------------------------------------------------
 @st.fragment
 def rul_tab_sow():
+    st.button("🔄", key="btn_refresh_rul")
     latest, err = api(base, "GET", "/api/v1/rul/latest")
     warm, _ = api(base, "GET", "/api/v1/rul/warmup")          # 구버전 서버면 None
     if err:
@@ -209,6 +210,7 @@ def rul_tab_sow():
 # ---------알림 탭 실행 함수--------------------------------------------------------------
 @st.fragment
 def alerts_tab_sow():
+    st.button("🔄", key="btn_refresh_alerts")
     asum, aerr = get_cached_api_get(base, "/api/v1/alerts/summary")
     if not asum:
             st.info(f"알림 정보를 불러오지 못했습니다. {aerr or ''}")
@@ -240,6 +242,7 @@ def alerts_tab_sow():
 # -------진동 · FFT 탭 함수-----------------------------------------------------------
 @st.fragment
 def vib_tab_sow():
+    st.button("🔄", key="btn_refresh_vib")
     vcfg, _ = get_cached_api_get(base, "/api/v1/vib/config")
     vlat, verr = get_cached_api_get(base, "/api/v1/vib/latest")
     vdf = vib_latest_to_df(vlat["data"], warn, crit, stale_after) if vlat else pd.DataFrame()
@@ -307,6 +310,7 @@ def vib_tab_sow():
 # ----결함 분류 (CWRU)-------------------------------------------------------------------------
 @st.fragment
 def cwru_tab_sow():
+    st.button("🔄", key="btn_refresh_cwru")
     st.caption("CWRU Random Forest 분류기: 0HP 데이터로 학습한 모델이 학습에 쓰지 않은 3HP 파일의 윈도우를 정상·내륜·볼·외륜으로 분류합니다. IMS 신호에는 쓰지 않습니다.")
     cfiles, cerr = get_cached_api_get(base, "/api/v1/cwru/files")
     clat, _ = get_cached_api_get(base, "/api/v1/cwru/latest")
@@ -389,9 +393,9 @@ with st.sidebar:
     hpc = st.number_input("1 사이클 = N 시간 (가정값)", min_value=0.1, max_value=1000.0, value=1.0, step=0.5,
                           help="C-MAPSS에는 실제 시간이 없어 화면 표시용 가정값입니다.")
 
-    st.subheader("새로고침")
-    auto = st.toggle("자동 새로고침", value=False)
-    every = st.slider("주기(초)", 2, 30, 5)
+    #st.subheader("새로고침")
+    #auto = st.toggle("자동 새로고침", value=False)
+    #every = st.slider("주기(초)", 2, 30, 5)
 
 
 # ---------------------------------------------------------------- 본문
@@ -403,7 +407,9 @@ if "shown_critical_ids" not in st.session_state:
 
 
 #@st.fragment(run_every=10)
+@st.fragment
 def render():
+    st.button("🔄", key="btn_refresh")
     summary, err = get_cached_api_get(base, "/api/v1/rul/summary")
     if err:
         st.error(err)
@@ -459,16 +465,13 @@ def render():
 
 
 # 1. 상단 상태/알림 영역 (auto가 켜졌을 때만 주기 갱신)
-if auto:
-    @st.fragment(run_every=every)
-    def _top_live():
-        render()
-    _top_live()
-elif st.button("새로고침", key="top_manual_refresh"):
-    get_cached_api_get.clear()
-    render()
-else:
-    render()
+#if auto:
+#    @st.fragment(run_every=every)
+#    def _top_live():
+#        render()
+#    _top_live()
+
+render()
 
 
 # 2. 탭 선택 및 선택된 탭 프래그먼트 호출
