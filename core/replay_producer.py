@@ -100,9 +100,51 @@ def iter_ims_waveforms(data_dir, fs: int = 20480):
             }
 
 
+# 서비스 시연용 CWRU 파일: 모델은 0HP 로 학습했으므로 학습에 쓰지 않은 3HP(약 1730rpm) 파일을 재생한다.
+CWRU_REPLAY_FILES = {100: ("normal", 0.0, 3), 108: ("inner", 0.007, 3), 121: ("ball", 0.007, 3), 133: ("outer", 0.007, 3),
+                     212: ("inner", 0.021, 3), 225: ("ball", 0.021, 3), 237: ("outer", 0.021, 3)}
+CWRU_FS, CWRU_WINDOW, CWRU_HOP = 12_000, 2048, 1024
+
+
+def _load_cwru(path):
+    """노트북 load_cwru 와 동일: Drive End 가속도(12kHz)와 회전수."""
+    from scipy.io import loadmat
+    m = loadmat(path)
+    key = [k for k in m if k.endswith("_DE_time")][0]
+    rpm_key = [k for k in m if k.endswith("RPM")]
+    rpm = float(m[rpm_key[0]].ravel()[0]) if rpm_key else 1797.0
+    return m[key].ravel().astype(float), rpm
+
+
+def count_cwru_windows(data_dir, files=None, window=CWRU_WINDOW, hop=CWRU_HOP) -> int:
+    total = 0
+    for num in (files or CWRU_REPLAY_FILES):
+        path = Path(data_dir) / f"{num}.mat"
+        if path.exists():
+            total += (len(_load_cwru(path)[0]) - window) // hop + 1
+    return total
+
+
+def iter_cwru_windows(data_dir, files=None, window=CWRU_WINDOW, hop=CWRU_HOP):
+    """CWRU 파일을 2048샘플 윈도우(50% 겹침)로 잘라 파일 순서대로 내보낸다. 없는 파일은 건너뛴다.
+    label_true 는 데모에서 정답과 비교하기 위한 값이며 분류기 입력으로는 쓰이지 않는다."""
+    files = files or CWRU_REPLAY_FILES
+    for num, (label, size, load) in files.items():
+        path = Path(data_dir) / f"{num}.mat"
+        if not path.exists():
+            logger.warning("CWRU 파일 없음, 건너뜀: %s", path)
+            continue
+        x, rpm = _load_cwru(path)
+        for pos in range(0, len(x) - window + 1, hop):
+            yield {"asset_id": f"cwru_{num}", "source": "cwru_de12k", "file_id": num, "label_true": label,
+                   "severity": size, "load_hp": load, "rpm": rpm, "win_idx": pos // hop, "fs": CWRU_FS,
+                   "ts": _now(), "samples": x[pos:pos + window].tolist()}
+
+
 async def replay(kind: str, data_dir: str, interval: float, loop_forever: bool):
-    topic = settings.KAFKA_TOPIC_CYCLE_RAW if kind == "cycle" else settings.KAFKA_TOPIC_VIBRATION_RAW
-    gen_fn = iter_cycle_messages if kind == "cycle" else iter_ims_waveforms
+    topic = {"cycle": settings.KAFKA_TOPIC_CYCLE_RAW, "vibration": settings.KAFKA_TOPIC_VIBRATION_RAW,
+             "cwru": getattr(settings, "KAFKA_TOPIC_CWRU_RAW", "factory.cwru.raw")}[kind]
+    gen_fn = {"cycle": iter_cycle_messages, "vibration": iter_ims_waveforms, "cwru": iter_cwru_windows}[kind]
 
     producer = AIOKafkaProducer(
         bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
@@ -128,7 +170,7 @@ async def replay(kind: str, data_dir: str, interval: float, loop_forever: bool):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     ap = argparse.ArgumentParser()
-    ap.add_argument("kind", choices=["cycle", "vibration"])
+    ap.add_argument("kind", choices=["cycle", "vibration", "cwru"])
     ap.add_argument("--data-dir", required=True)
     ap.add_argument("--interval", type=float, default=0.2, help="메시지 간 대기(초)")
     ap.add_argument("--loop", action="store_true", help="끝나면 처음부터 반복")

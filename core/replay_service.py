@@ -14,7 +14,7 @@ from pathlib import Path
 from aiokafka import AIOKafkaProducer
 
 from config.settings import settings
-from core.replay_producer import iter_cycle_messages, iter_ims_waveforms
+from core.replay_producer import count_cwru_windows, iter_cwru_windows, iter_cycle_messages, iter_ims_waveforms
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,8 @@ class ReplayService:
     def _resolve(kind: str):
         if kind == "cycle":
             return Path(settings.CMAPSS_DATA_DIR), settings.KAFKA_TOPIC_CYCLE_RAW, iter_cycle_messages
+        if kind == "cwru":
+            return Path(settings.CWRU_DATA_DIR), getattr(settings, "KAFKA_TOPIC_CWRU_RAW", "factory.cwru.raw"), iter_cwru_windows
         if kind == "vibration":
             return Path(settings.IMS_DATA_DIR), settings.KAFKA_TOPIC_VIBRATION_RAW, iter_ims_waveforms
         raise ValueError(f"알 수 없는 kind: {kind}")
@@ -64,6 +66,8 @@ class ReplayService:
         if kind == "cycle":
             with open(data_dir / "test_FD001.txt", "rb") as f:
                 return sum(1 for line in f if line.strip())
+        if kind == "cwru":
+            return count_cwru_windows(data_dir)
         return sum(1 for p in data_dir.iterdir() if p.is_file()) * IMS_CHANNELS
 
     async def begin(self, kind: str, interval: float, loop_forever: bool = False):

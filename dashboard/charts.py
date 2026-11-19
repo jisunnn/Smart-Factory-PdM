@@ -95,3 +95,16 @@ def spectrogram_fig(xs, freqs, Z, fault_hz=None):
     fig.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(title="elapsed (h)"),
                       yaxis=dict(title="주파수 (Hz)"))
     return fig
+
+
+def proba_fig(classes, proba, labels=None):
+    """클래스별 확률 막대 (가장 높은 클래스를 강조)."""
+    labels = labels or {}
+    names = [labels.get(c, c) for c in classes]
+    top = max(range(len(proba)), key=lambda i: proba[i])
+    fig = go.Figure(go.Bar(x=[100 * p for p in proba], y=names, orientation="h",
+                           marker_color=[COLOR["danger"] if i == top else "#9e9e9e" for i in range(len(proba))],
+                           text=[f"{100 * p:.0f}%" for p in proba], textposition="auto"))
+    fig.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(range=[0, 100], title="확률 (%) - 마지막 윈도우"),
+                      showlegend=False)
+    return fig

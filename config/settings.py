@@ -28,21 +28,24 @@ class Settings:
 
     #python
     KAFKA_TOPIC_VIBRATION_RAW: str = os.getenv("KAFKA_TOPIC_VIBRATION_RAW", "factory.vibration.raw")
-    KAFKA_TOPIC_CYCLE_RAW: str     = os.getenv("KAFKA_TOPIC_CYCLE_RAW", "factory.cycle.raw")
-    KAFKA_TOPIC_RUL_PRED: str      = os.getenv("KAFKA_TOPIC_RUL_PRED", "factory.rul.pred")
+    KAFKA_TOPIC_CYCLE_RAW: str = os.getenv("KAFKA_TOPIC_CYCLE_RAW", "factory.cycle.raw")
+    KAFKA_TOPIC_RUL_PRED: str = os.getenv("KAFKA_TOPIC_RUL_PRED", "factory.rul.pred")
+    KAFKA_TOPIC_CWRU_RAW: str = os.getenv("KAFKA_TOPIC_CWRU_RAW", "factory.cwru.raw")
     
     # 파이프라인 on/off
     ENABLE_VIRTUAL_DATA: bool = os.getenv("ENABLE_VIRTUAL_DATA", "true").lower() == "true"
     ENABLE_RUL_SERVICE: bool = os.getenv("ENABLE_RUL_SERVICE", "true").lower() == "true"
     ENABLE_VIB_SERVICE: bool = os.getenv("ENABLE_VIB_SERVICE", "true").lower() == "true"
+    ENABLE_CWRU_SERVICE: bool = os.getenv("ENABLE_CWRU_SERVICE", "true").lower() == "true"
 
     # ML
     ML_ARTIFACT_DIR: Path = BASE_DIR / "ml" / "artifacts"
     RUL_MODEL_FILES: list = os.getenv("RUL_MODEL_FILES", "rul_cnn_bilstm_fd001.pt").split(",")
 
     # 리플레이용 데이터 폴더 (본인 경로로 .env 에서 지정)
-    CMAPSS_DATA_DIR: str = os.getenv("CMAPSS_DATA_DIR", "C:/pdm_data/cmapss")
-    IMS_DATA_DIR: str = os.getenv("IMS_DATA_DIR", "C:/pdm_data/ims/2nd_test")
+    CMAPSS_DATA_DIR: str = os.getenv("CMAPSS_DATA_DIR", "C:/factory_pdm_data/cmapss")
+    IMS_DATA_DIR: str = os.getenv("IMS_DATA_DIR", "C:/factory_pdm_data/ims/2nd_test")
+    CWRU_DATA_DIR: str = os.getenv("CWRU_DATA_DIR", "C:/factory_pdm_data/cwru")
 
     # 알림 기준 (Health Index)
     ALERT_WARN_HI: float = float(os.getenv("ALERT_WARN_HI", "60"))
@@ -65,5 +68,9 @@ class Settings:
 
 # 전역에서 가져다 쓸 수 있도록 인스턴스 생성
 settings = Settings()
+
+
+    
+    
 
 

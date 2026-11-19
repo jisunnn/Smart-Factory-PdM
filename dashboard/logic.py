@@ -104,3 +104,19 @@ def spectra_to_arrays(data: list[dict], step_hz: float):
 def alert_where(a: dict) -> str:
     """알림 목록의 위치 표기: 진동은 '파일 N', RUL 은 'N사이클'."""
     return f"{a['asset_id']} · " + (f"파일 {a['cycle']}" if a.get("source") == "ims_set2" else f"{a['cycle']}사이클")
+
+
+# ---------------------------------------------------------------- CWRU 결함 분류
+CLASS_KO = {"normal": "정상", "inner": "내륜", "ball": "볼", "outer": "외륜"}
+
+
+def cwru_files_to_df(data: list[dict]) -> pd.DataFrame:
+    """/api/v1/cwru/files 의 data → 화면 표 (파일별 정답, 정확도, 예측 분포)."""
+    rows = []
+    for d in data:
+        dist = ", ".join(f"{CLASS_KO.get(k, k)} {v}" for k, v in sorted(d.get("dist", {}).items(), key=lambda kv: -kv[1]))
+        rows.append({"파일": d["file_id"], "정답": CLASS_KO.get(d["label_true"], d["label_true"]),
+                     "결함 크기(inch)": d["severity"], "부하(HP)": d["load_hp"], "윈도우 수": d["n"],
+                     "단일 윈도우 정확도(%)": round(100 * d["accuracy"], 1), "투표 정확도(%)": round(100 * d["vote_accuracy"], 1),
+                     "예측 분포": dist})
+    return pd.DataFrame(rows)

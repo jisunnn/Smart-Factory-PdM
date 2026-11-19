@@ -67,9 +67,11 @@ class AlertEngine:
 
         tail = f", 예상 잔여 약 {rul_pred:.0f}사이클" if rul_pred is not None else ""     # 진동 알림은 RUL 없음
         if new == 2:
-            msg = f"긴급: {asset_id} Health Index {health_index:.1f} (기준 {self.crit:g} 미만){tail} — 즉시 점검 필요"
+            #msg = f"긴급: {asset_id} Health Index {health_index:.1f} (기준 {self.crit:g} 미만){tail} — 즉시 점검 필요"
+            msg = f"[{asset_id}] Health Index : {health_index:.1f} (기준 {self.crit:g} 미만){tail} — 즉시 점검 필요"
         else:
-            msg = f"주의: {asset_id} Health Index {health_index:.1f} (기준 {self.warn:g} 미만){tail} — 점검 계획 필요"
+            #msg = f"주의: {asset_id} Health Index {health_index:.1f} (기준 {self.warn:g} 미만){tail} — 점검 계획 필요"
+            msg = f"[{asset_id}] Health Index : {health_index:.1f} (기준 {self.warn:g} 미만){tail} — 점검 계획 필요"
         return {
             "time": ts or datetime.now(timezone.utc).isoformat(),
             "asset_id": asset_id,
