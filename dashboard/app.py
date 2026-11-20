@@ -37,22 +37,25 @@ def critical_alert_dialog(base: str, critical_items: list[dict]):
         alert_id = item["id"]
         engine = item.get("asset_id")
         cycle = item.get("cycle", "-")
-        hi = item.get("health_index", item.get("hi", "-"))
+        hi = item.get("health_index")
         rul = item.get("rul_pred", "-")
 
         with cols[idx % 2]:
             with st.container(border=True):
                 st.markdown(f"🔴 **{engine}**")
-                st.caption(f"가동 사이클: {cycle}")
-                st.markdown(
-                    f"Health Index : :red[**{hi}**] :gray[(기준 30 미만)]  \n"
-                    f"예상 잔여 사이클 : 약 :red[**{rul}**] "
-                )
-                
+                if cycle and rul : 
+                    st.caption(f"가동 사이클: {cycle}")
+                    st.markdown(
+                        f"Health Index : :red[**{hi}**] :gray[(기준 30 미만)]  \n"
+                        f"예상 잔여 사이클 : 약 :red[**{rul}**] "
+                    )
+                else:                   
+                    st.markdown(f"Health Index : :red[**{hi}**] :gray[(기준 30 미만)]  \n")
+
                 if st.button(
                     "확인 완료",
                     key=f"ack_alert_{alert_id}",
-                    use_container_width=True,
+                    width='stretch',
                 ):
                     _ack_alert(base, alert_id)
                     st.rerun()
@@ -87,9 +90,20 @@ def get_cached_history(base_url, path, limit_val):
     return res, err
 
 
-@st.cache_data(ttl=30, show_spinner=False)  # 진동 데이터는 조금 무거우니 ttl을 30초~1분 정도로
+@st.cache_data(ttl=30)  # 진동 데이터는 조금 무거우니 ttl을 30초~1분 정도로
 def get_cached_spectrum(base_url, bearing_id, limit_count):
     res, err = api(base_url, "GET", f"/api/v1/vib/spectrum/{bearing_id}", params={"limit": limit_count})
+    return res, err
+
+
+@st.cache_data(ttl=5)
+def get_cached_alerts(base_url: str, unacked_only: bool, limit_val: int = 30):
+    res, err = api(
+        base_url,
+        "GET",
+        "/api/v1/alerts",
+        params={"limit": limit_val, "unacked_only": str(unacked_only).lower()},
+    )
     return res, err
 #-------------------------===================================
 
@@ -153,7 +167,7 @@ def engine_status_show(view):
         st.warning(f"⚫ 데이터 끊김: 마지막 수신 {format_age(row.get('age_sec'))} 전 — 아래 값은 마지막으로 받은 시점의 값입니다.")
     left, right = st.columns([1, 2])
     with left:
-        st.plotly_chart(gauge(row["health_index"], warn, crit), use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(gauge(row["health_index"], warn, crit), width='stretch', config={"displayModeBar": False})
         st.metric("예측 RUL", f"{row['rul_pred']:.0f} 사이클")
         st.caption(f"≈ {cycles_to_hours(row['rul_pred'], hpc):.0f} 시간 (가정: 1사이클 = {hpc}시간)")
         if pd.notna(row.get("rul_true")):
@@ -167,16 +181,15 @@ def engine_status_show(view):
             if hdf.empty:
                 st.info("이력이 없습니다.")
             else:
-                st.plotly_chart(history_fig(hdf, sel, warn, crit), use_container_width=True, config={"displayModeBar": False, "scrollZoom": False})
+                st.plotly_chart(history_fig(hdf, sel, warn, crit), width='stretch', config={"displayModeBar": False}) #, "scrollZoom": False 
 #--------------------------------------------------------------
-
 
 #-----설비 RUL · Health Index 탭 실행 함수--------------------------------------------------------------------
 @st.fragment
 def rul_tab_sow():
     st.button("🔄", key="btn_refresh_rul")
-    latest, err = api(base, "GET", "/api/v1/rul/latest")
-    warm, _ = api(base, "GET", "/api/v1/rul/warmup")          # 구버전 서버면 None
+    latest, err = get_cached_api_get(base, "/api/v1/rul/latest")
+    warm, _ = get_cached_api_get(base, "/api/v1/rul/warmup")          # 구버전 서버면 None
     if err:
         st.error(err)
     else:
@@ -209,20 +222,34 @@ def rul_tab_sow():
 
 # ---------알림 탭 실행 함수--------------------------------------------------------------
 @st.fragment
-def alerts_tab_sow():
-    st.button("🔄", key="btn_refresh_alerts")
+def alerts_tab_sow():  
     asum, aerr = get_cached_api_get(base, "/api/v1/alerts/summary")
+    
     if not asum:
             st.info(f"알림 정보를 불러오지 못했습니다. {aerr or ''}")
     else:
         k1, k2, k3, k4 = st.columns([1, 1, 1, 1])
         k1.metric("🔴 긴급 (미확인/전체)", f"{asum['critical']['unacked']} / {asum['critical']['total']}")
-        k2.metric("🟠 주의 (미확인/전체)", f"{asum['warning']['unacked']} / {asum['warning']['total']}")
+        k2.metric("🟠 주의 (미확인/전체)", f"{asum['warning']['unacked']} / {asum['warning']['total']}") 
         only = k3.checkbox("미확인만 보기", value=True, key="alerts_unacked")
+        conut_all = asum['critical']['total'] + asum['warning']['total']
         if k4.button("모두 확인 처리"):
-            api(base, "POST", "/api/v1/alerts/ack-all")
-            st.rerun(scope="fragment")
-        res, err = api(base, "GET", "/api/v1/alerts", params={"limit": 30, "unacked_only": str(only).lower()})
+            _, err = api(base, "POST", "/api/v1/alerts/ack-all")
+            if err:
+                st.warning(f"일괄 확인 실패: {err}")
+            else:
+                get_cached_alerts.clear()
+                get_cached_api_get.clear()
+                st.rerun(scope="fragment")
+        res, err = get_cached_alerts(base, only, max(conut_all, 1)) # api(base, "GET", "/api/v1/alerts", params={"limit": 30, "unacked_only": str(only).lower()})
+        st.markdown("<hr style='margin: 4px 0 10px 0; border-color: rgba(255,255,255,0.1);'>", unsafe_allow_html=True)
+        header_cols = st.columns([1.1, 1.6, 6, 1.2], vertical_alignment="bottom")
+        header_cols[0].caption("**알림 단계**")      # 상세한 조정 시 st.markdown("**알림 단계**")
+        header_cols[1].caption("**대상**")
+        header_cols[2].caption("**상세 내용**")
+        header_cols[3].caption("**확인 처리**")
+
+        st.markdown("<hr style='margin: 4px 0 10px 0; border-color: rgba(255,255,255,0.1);'>", unsafe_allow_html=True)
         if err:
             st.error(err)
         elif not res["data"]:
@@ -234,9 +261,14 @@ def alerts_tab_sow():
                 c[1].write(alert_where(a))
                 c[2].write(a["message"])
                 if a["acknowledged"]:
-                    c[3].caption("확인됨")
+                    c[3].caption("확인 완료")
                 elif c[3].button("확인", key=f"ack_{a['id']}"):
-                    api(base, "POST", f"/api/v1/alerts/{a['id']}/ack")
+                    _, err = api(base, "POST", f"/api/v1/alerts/{a['id']}/ack")
+                    if err:
+                        st.warning(f"확인 처리 실패 (ID {a['id']}): {err}")
+                    else:
+                        get_cached_alerts.clear()
+                        get_cached_api_get.clear()
                     st.rerun(scope="fragment")
 
 # -------진동 · FFT 탭 함수-----------------------------------------------------------
@@ -475,7 +507,7 @@ render()
 
 
 # 2. 탭 선택 및 선택된 탭 프래그먼트 호출
-tab_rul, tab_alert, tab_vib, tab_cwru = st.tabs(["설비 RUL · Health Index", "알림", "진동 · FFT", "**결함 분류 (CWRU)**"])
+tab_rul, tab_alert, tab_vib, tab_cwru = st.tabs(["설비 RUL · Health Index", "알림", "진동 · FFT", "**결함 분류 (CWRU)**"]) # 탭 이름을 설비이름으로 변경할 지 고려
 with tab_rul:
     rul_tab_sow()
 

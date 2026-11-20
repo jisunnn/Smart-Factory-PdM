@@ -1,6 +1,6 @@
 # --- Web Framework & Server ---
-fastapi==0.110.0
-uvicorn[standard]==0.28.0
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
 
 # --- Streaming & Message Broker ---
 aiokafka==0.10.0
@@ -20,7 +20,7 @@ xgboost==2.0.3
 torch==2.2.1
 
 # --- .env setting values safey load ---
-pydantic==2.6.4
+pydantic==2.14.2
 pydantic-settings==2.2.1
 
 # --- safey .env
@@ -32,3 +32,5 @@ plotly
 requests
 
 pyarrow<16
+
+
