@@ -26,7 +26,7 @@ class Settings:
     DB_PORT: str = os.getenv("DB_PORT", "5432")
     DB_NAME: str = os.getenv("DB_NAME", "smart_factory")
 
-    #python
+    #Kafka Topic
     KAFKA_TOPIC_VIBRATION_RAW: str = os.getenv("KAFKA_TOPIC_VIBRATION_RAW", "factory.vibration.raw")
     KAFKA_TOPIC_CYCLE_RAW: str = os.getenv("KAFKA_TOPIC_CYCLE_RAW", "factory.cycle.raw")
     KAFKA_TOPIC_RUL_PRED: str = os.getenv("KAFKA_TOPIC_RUL_PRED", "factory.rul.pred")
@@ -37,6 +37,7 @@ class Settings:
     ENABLE_RUL_SERVICE: bool = os.getenv("ENABLE_RUL_SERVICE", "true").lower() == "true"
     ENABLE_VIB_SERVICE: bool = os.getenv("ENABLE_VIB_SERVICE", "true").lower() == "true"
     ENABLE_CWRU_SERVICE: bool = os.getenv("ENABLE_CWRU_SERVICE", "true").lower() == "true"
+    ENABLE_AGENT_SERVICE: bool = os.getenv("ENABLE_AGENT_SERVICE", "true").lower() == "true"
 
     # ML
     ML_ARTIFACT_DIR: Path = BASE_DIR / "ml" / "artifacts"
@@ -59,6 +60,17 @@ class Settings:
 
     # 메모리 정리 기준 시간 (기준 시간 이상 데이터가 없는 엔진의 윈도우 버퍼와 알림 상태를 삭제)
     ENGINE_IDLE_PRUNE_SEC: int = int(os.getenv("ENGINE_IDLE_PRUNE_SEC", "3600"))
+
+    # GEMINI and agent settings
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    GEMINI_EMBED_MODEL: str = os.getenv("GEMINI_EMBED_MODEL", "gemini-embedding-001")
+    GEMINI_MAX_RPM: int = int(os.getenv("GEMINI_MAX_RPM", "10"))               # 분당 호출 제한
+    AGENT_USE_LLM: bool = os.getenv("AGENT_USE_LLM", "true").lower() == "true"  # false 면 항상 템플릿
+    AGENT_MAX_WAIT_SEC: float = float(os.getenv("AGENT_MAX_WAIT_SEC", "20"))
+
+    # 메뉴얼 파일 경로
+    MANUAL_PATH: str = os.getenv("MANUAL_PATH", str(BASE_DIR / "agent" / "knowledge" / "pdm_manual.md"))
     
     #property : 함수인데 변수처럼 사용 가능하게
     @property

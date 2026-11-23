@@ -60,6 +60,7 @@ async def handle_vib_batch(batch, scorer, alert_engine, db_pool, producer, inser
                 d = diagnose(srow.get("z_env_bpfo"), srow.get("z_env_bpfi"), srow.get("z_env_bsf"),
                              getattr(settings, "FAULT_MIN_Z", 3.0), getattr(settings, "FAULT_MARGIN", 1.5))
                 a["message"] += f" · 의심 결함: {d['label']}"
+                a["defect_kind"], a["defect_label"] = d["kind"], d["label"]      # 에이전트(작업 지시서)가 읽는 구조화 필드
                 alerts.append(a)
     if scores:
         await insert_fn(db_pool, scores, spectra)

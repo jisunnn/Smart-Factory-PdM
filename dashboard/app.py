@@ -5,6 +5,7 @@
 """
 import os
 
+import json
 import numpy as np
 import pandas as pd
 import requests
@@ -50,7 +51,7 @@ def critical_alert_dialog(base: str, critical_items: list[dict]):
                         f"예상 잔여 사이클 : 약 :red[**{rul}**] "
                     )
                 else:                   
-                    st.markdown(f"Health Index : :red[**{hi}**] :gray[(기준 30 미만)]  \n")
+                    st.markdown(f"Health Index : :red[**{hi:.1f}**] :gray[(기준 30 미만)]  \n")
 
                 if st.button(
                     "확인 완료",
@@ -182,12 +183,211 @@ def engine_status_show(view):
                 st.info("이력이 없습니다.")
             else:
                 st.plotly_chart(history_fig(hdf, sel, warn, crit), width='stretch', config={"displayModeBar": False}) #, "scrollZoom": False 
-#--------------------------------------------------------------
+
+#-------ims 스펙트럼 그래프 함수-------------------------------------------------------
+@st.fragment
+def ims_spectrum_show(vcfg, vdf):
+    bsel = st.selectbox("베어링 선택", [int(b) for b in vdf["bearing"]], key="vib_bearing", format_func=lambda b: f"베어링 {b}")
+    nfiles = st.slider("스펙트로그램에 쓸 최근 파일 수", 30, 600, 150, step=30, key="vib_nfiles",
+                                help="파일 1개 = 1초 파형 (10분 간격 기록). 150개 ≈ 25시간")
+    sp, serr = get_cached_spectrum(base, bsel, nfiles)  # 캐시 적용된 api 호출
+    fault = (vcfg or {}).get("fault_hz") or {}
+    step = (sp or {}).get("step_hz", 2)
+    arr = spectra_to_arrays(sp["data"], step) if sp else None
+    if serr:
+        st.error(serr)
+    elif arr is None:
+        st.info("이 베어링의 스펙트럼이 아직 없습니다.")
+    else:
+        xs, freqs, Z = arr
+        left, right = st.columns(2)
+        with left:
+            st.markdown("**엔벨로프 스펙트럼 (현재 vs 이전)**")
+            ref = Z[:, 0] if Z.shape[1] > 1 else None
+            st.plotly_chart(spectrum_fig(freqs, Z[:, -1], f"현재 ({xs[-1]:.0f}h)", ref, f"이전 ({xs[0]:.0f}h)", fault))
+        with right:
+            st.markdown("**스펙트로그램 (시간 x 주파수)**")
+            st.plotly_chart(spectrogram_fig(xs, freqs, Z, fault))
+        st.caption("점선 = 결함 주파수(BPFO 외륜, BPFI 내륜, BSF 볼, FTF 케이지). 결함이 진행되면 해당 주파수 부근의 진폭이 커집니다.")
+        cur = vdf[vdf["bearing"] == bsel].iloc[0]
+        z1, z2, z3 = st.columns(3)
+        z1.metric("외륜(BPFO) 피크", f"{cur['z_env_bpfo']:+.1f} σ", help="정상 구간 대비 표준편차 배수")
+        z2.metric("내륜(BPFI) 피크", f"{cur['z_env_bpfi']:+.1f} σ")
+        z3.metric("볼(BSF) 피크", f"{cur['z_env_bsf']:+.1f} σ")
+        st.caption("의심 결함은 규칙 기반 추정입니다: Health Index가 주의 기준 아래일 때, 세 결함 주파수 중 정상 대비 가장 크게 늘어난 것을 표시합니다. "
+                    "임계값(3σ 이상, 1위와 2위 차이 1.5σ 이상)은 검증 전 시작값이며, 이 데이터(IMS Set 2)에서 검증 가능한 결함은 외륜뿐입니다.")
+
+# -------cwru 그래프 함수------------------------------
+@st.fragment
+def cwru_show(clat, ccfg, cfiles):
+    row = (clat or {}).get("data")
+    if row:
+        c1_, c2_, c3_ = st.columns(3)
+        c1_.metric("재생 중인 파일", f"{row['file_id']}", help="CWRU 파일 번호 (파일마다 정상/결함 유형이 다름)")
+        c2_.metric("정답 (평가용)", CLASS_KO.get(row["label_true"], row["label_true"]), help="분류기 입력이 아니라 정확도 비교용입니다.")
+        c3_.metric("분류 결과 (최근 10개 윈도우 투표)", CLASS_KO.get(row["vote_label"], row["vote_label"]))
+        if ccfg and ccfg.get("classes") and row.get("proba"):
+            st.plotly_chart(proba_fig(ccfg["classes"], row["proba"], CLASS_KO))
+    fd = cfiles["data"]
+    tot = sum(d["n"] for d in fd)
+    st.metric("전체 단일 윈도우 정확도", f"{100 * sum(d['correct'] for d in fd) / max(tot, 1):.1f}%",
+                help=f"윈도우 {tot:,}개 기준")
+    show_table(cwru_files_to_df(fd))
+    st.caption("CWRU는 쉬운 벤치마크라 높은 정확도가 모델의 우수성을 뜻하지는 않습니다. 이 화면은 서비스 경로에서 Colab 평가와 같은 결과가 재현되는지를 보여 줍니다.")
+
+
+
+# ------작업 지시서 부분 대시보드 함수
+@st.fragment
+def _render_workorder_card(wo: dict):
+    """work_orders DB 레코드(wo)와 payload를 구조화된 UI 카드로 렌더링"""
+    # payload가 문자열(JSON)로 내려올 경우를 대비한 안전 파싱
+    p = wo.get("payload") or {}
+    if isinstance(p, str):
+        try:
+            p = json.loads(p)
+        except Exception:
+            p = {}
+
+    level = wo.get("level", "warning")
+    is_crit = level == "critical"
+
+    st.divider()
+
+    # 1. 최상단 긴급/주의 배너 (대응 시한 강조)
+    sla = p.get("sla") or ("즉시(1시간 이내) 가동 중지 검토 및 부품 교체 착수" if is_crit else "24시간 이내 현장 점검")
+    if is_crit:
+        st.error(f"🚨 **[긴급 / Critical]** 필수 대응 시한: **{sla}**")
+    else:
+        st.warning(f"⚠️ **[주의 / Warning]** 필수 대응 시한: **{sla}**")
+
+    # 2. 핵심 메타 지표 4단 카드 (DB 컬럼 + payload 조합)
+    hi_val = p.get("hi")
+    hi_str = f"{float(hi_val):.1f}" if hi_val is not None else "-"
+    rul_val = p.get("rul")
+    rul_str = f"{float(rul_val):.1f}h" if rul_val is not None else "해당 없음"
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("설비 ID", wo.get("asset_id") or "-")
+    c2.metric("Health Index", hi_str)
+    c3.metric("예측 RUL", rul_str)
+    c4.metric("SOP 코드", wo.get("sop_code") or "-")
+
+    # 부가 메타 정보 한 줄 요약 (DB의 source, cycle, status, llm_used 활용)
+    issued_at = p.get("issued_at") or wo.get("alert_time") or wo.get("created_at") or "-"
+    source_map = {"vib": "진동 HI·결함분류", "rul": "RUL 예측"}
+    source_str = source_map.get(wo.get("source"), wo.get("source") or "-")
+    cycle_str = f"Cycle #{wo['cycle']}" if wo.get("cycle") is not None else ""
+    gen_badge = "🤖 AI 생성" if wo.get("llm_used") else f"📄 템플릿 ({wo.get('fallback_reason') or '기본'})"
+
+    meta_items = [f"발행 일시: {issued_at}", f"분석 경로: {source_str}", f"생성 방식: {gen_badge}"]
+    if cycle_str:
+        meta_items.insert(2, cycle_str)
+    st.caption("  |  ".join(meta_items))
+
+    # 3. AI 상황 요약 및 우선 조치 이유 (상단 배치)
+    summary = p.get("summary")
+    rationale = p.get("rationale")
+    if summary or rationale:
+        with st.container(border=True):
+            st.markdown("#### 🤖 AI 상황 요약 및 판단 근거")
+            if summary:
+                st.markdown(f"**[상황 요약]** {summary}")
+            if rationale:
+                st.info(f"**[우선 조치 이유]** {rationale}")
+
+    # 4. 좌측: 조치 권고사항 / 우측: 안전 작업 절차(LOTO) 2단 분할
+    steps = p.get("steps") or []
+    loto_steps = p.get("loto") or []
+
+    if steps or loto_steps:
+        col_left, col_right = st.columns([1.2, 1])
+
+        with col_left:
+            st.markdown("#### 🔧 조치 권고사항 (매뉴얼 원문)")
+            for idx, s in enumerate(steps, 1):
+                if isinstance(s, dict):
+                    is_pri = s.get("priority") or s.get("selected")
+                    stage = s.get("stage", "")
+                    text = s.get("text", "")
+                    ref = s.get("ref", "")
+                    badge = " ⭐ `우선`" if is_pri else ""
+                    with st.container(border=True):
+                        st.markdown(f"**{idx}. [{stage}]**{badge}")
+                        st.write(text)
+                        if ref:
+                            st.caption(f"출처: {ref}")
+                else:
+                    with st.container(border=True):
+                        st.write(f"**{idx}.** {s}")
+
+        with col_right:
+            st.markdown("#### ⚠️ 안전 작업 절차 (LOTO)")
+            with st.container(border=True):
+                if loto_steps:
+                    for i, l_step in enumerate(loto_steps, 1):
+                        # 딕셔너리인 경우 text만 깔끔하게 추출
+                        if isinstance(l_step, dict):
+                            l_text = l_step.get("text", str(l_step))
+                        else:
+                            l_text = str(l_step)
+                        st.checkbox(f"{i}. {l_text}", key=f"loto_{wo.get('id', issued_at)}_{i}")
+                else:
+                    st.write("매뉴얼 4장 표준 LOTO 절차 준수")
+                if p.get("verification"):
+                    st.divider()
+                    st.markdown(f"**필수 안전 및 검증 기준:** {p['verification']}")
+    else:
+        # payload에 steps가 없는 구버전 데이터일 경우 기존 text로 안전하게 폴백
+        st.markdown(wo.get("text", ""))
+
+    # 5. 참조 매뉴얼 근거 문단 (접기 기능으로 본문 깔끔하게 유지)
+    evidence = p.get("evidence") or []
+    if evidence:
+        with st.expander("📚 참조 매뉴얼 근거 문단 보기"):
+            for ev in evidence:
+                st.write(f"- {ev}")
+
+
+#-----알림 워커 함수
+@st.fragment(run_every=5)
+def critical_alert_watcher():
+    asum, aerr = api(base, "GET", "/api/v1/alerts/summary")
+    if asum:
+        nc, nw = asum["critical"]["unacked"], asum["warning"]["unacked"]
+        if nc:
+            st.error(f"🚨 미확인 긴급 알림 {nc}건 (주의 {nw}건) — '알림' 탭에서 확인하세요.")
+            #====================알림===========
+            res_crit, _ = api(base, "GET", "/api/v1/alerts", params={
+                "limit": max(nc, 1), # 확인 안된 모든 긴급알림
+                "unacked_only": "true",
+                "level": "critical"
+                })
+            items = (res_crit or {}).get("data", [])
+
+            if items:
+                # 2. 아직 팝업으로 띄운 적 없는 새 알림만 골라내기
+                new_items = [
+                    item for item in items 
+                    if item["id"] not in st.session_state["shown_critical_ids"]
+                ]
+
+                # 3. 새로운 긴급 알림이 감지되었을 때만 팝업 실행
+                if new_items:
+                    for item in new_items:
+                        st.session_state["shown_critical_ids"].add(item["id"])
+                    
+                    critical_alert_dialog(base, new_items)         
+            #======================================         
+        elif nw:
+            st.warning(f"⚠️ 미확인 주의 알림 {nw}건 — '알림' 탭에서 확인하세요.")
+
+
 
 #-----설비 RUL · Health Index 탭 실행 함수--------------------------------------------------------------------
 @st.fragment
 def rul_tab_sow():
-    st.button("🔄", key="btn_refresh_rul")
+    # st.button("🔄", key="btn_refresh_rul")
     latest, err = get_cached_api_get(base, "/api/v1/rul/latest")
     warm, _ = get_cached_api_get(base, "/api/v1/rul/warmup")          # 구버전 서버면 None
     if err:
@@ -308,36 +508,9 @@ def vib_tab_sow():
         if series:
             st.plotly_chart(vib_hi_fig(series, warn, crit))
 
-        st.divider()
-        bsel = st.selectbox("베어링 선택", [int(b) for b in vdf["bearing"]], key="vib_bearing", format_func=lambda b: f"베어링 {b}")
-        nfiles = st.slider("스펙트로그램에 쓸 최근 파일 수", 30, 600, 150, step=30, key="vib_nfiles",
-                            help="파일 1개 = 1초 파형 (10분 간격 기록). 150개 ≈ 25시간")
-        sp, serr = get_cached_spectrum(base, bsel, nfiles)  # 캐시 적용된 api 호출
-        fault = (vcfg or {}).get("fault_hz") or {}
-        step = (sp or {}).get("step_hz", 2)
-        arr = spectra_to_arrays(sp["data"], step) if sp else None
-        if serr:
-            st.error(serr)
-        elif arr is None:
-            st.info("이 베어링의 스펙트럼이 아직 없습니다.")
-        else:
-            xs, freqs, Z = arr
-            left, right = st.columns(2)
-            with left:
-                st.markdown("**엔벨로프 스펙트럼 (현재 vs 이전)**")
-                ref = Z[:, 0] if Z.shape[1] > 1 else None
-                st.plotly_chart(spectrum_fig(freqs, Z[:, -1], f"현재 ({xs[-1]:.0f}h)", ref, f"이전 ({xs[0]:.0f}h)", fault))
-            with right:
-                st.markdown("**스펙트로그램 (시간 x 주파수)**")
-                st.plotly_chart(spectrogram_fig(xs, freqs, Z, fault))
-            st.caption("점선 = 결함 주파수(BPFO 외륜, BPFI 내륜, BSF 볼, FTF 케이지). 결함이 진행되면 해당 주파수 부근의 진폭이 커집니다.")
-            cur = vdf[vdf["bearing"] == bsel].iloc[0]
-            z1, z2, z3 = st.columns(3)
-            z1.metric("외륜(BPFO) 피크", f"{cur['z_env_bpfo']:+.1f} σ", help="정상 구간 대비 표준편차 배수")
-            z2.metric("내륜(BPFI) 피크", f"{cur['z_env_bpfi']:+.1f} σ")
-            z3.metric("볼(BSF) 피크", f"{cur['z_env_bsf']:+.1f} σ")
-            st.caption("의심 결함은 규칙 기반 추정입니다: Health Index가 주의 기준 아래일 때, 세 결함 주파수 중 정상 대비 가장 크게 늘어난 것을 표시합니다. "
-                        "임계값(3σ 이상, 1위와 2위 차이 1.5σ 이상)은 검증 전 시작값이며, 이 데이터(IMS Set 2)에서 검증 가능한 결함은 외륜뿐입니다.")
+        st.divider()       
+        # 스펙트럼 그래프 함수 
+        ims_spectrum_show(vcfg, vdf)
 
 # ----결함 분류 (CWRU)-------------------------------------------------------------------------
 @st.fragment
@@ -352,20 +525,46 @@ def cwru_tab_sow():
     elif not cfiles or not cfiles["data"]:
         st.info("아직 CWRU 분류 결과가 없습니다. 사이드바에서 데이터를 'CWRU 3HP'로 선택하고 ▶ 시작을 누르세요.")
     else:
-        row = (clat or {}).get("data")
-        if row:
-            c1_, c2_, c3_ = st.columns(3)
-            c1_.metric("재생 중인 파일", f"{row['file_id']}", help="CWRU 파일 번호 (파일마다 정상/결함 유형이 다름)")
-            c2_.metric("정답 (평가용)", CLASS_KO.get(row["label_true"], row["label_true"]), help="분류기 입력이 아니라 정확도 비교용입니다.")
-            c3_.metric("분류 결과 (최근 10개 윈도우 투표)", CLASS_KO.get(row["vote_label"], row["vote_label"]))
-            if ccfg and ccfg.get("classes") and row.get("proba"):
-                st.plotly_chart(proba_fig(ccfg["classes"], row["proba"], CLASS_KO))
-        fd = cfiles["data"]
-        tot = sum(d["n"] for d in fd)
-        st.metric("전체 단일 윈도우 정확도", f"{100 * sum(d['correct'] for d in fd) / max(tot, 1):.1f}%",
-                    help=f"윈도우 {tot:,}개 기준")
-        show_table(cwru_files_to_df(fd))
-        st.caption("CWRU는 쉬운 벤치마크라 높은 정확도가 모델의 우수성을 뜻하지는 않습니다. 이 화면은 서비스 경로에서 Colab 평가와 같은 결과가 재현되는지를 보여 줍니다.")
+        cwru_show(clat, ccfg, cfiles)
+        
+
+# --에이전트 탭-----------------------------------
+@st.fragment
+def agent_tab_sow():
+    asm, aerr2 = get_cached_api_get(base, "/api/v1/agent/summary")
+    if aerr2 or not asm:
+        st.info(f"작업 지시서 에이전트 정보를 불러오지 못했습니다. {aerr2 or ''}")
+    else:
+        ag = asm.get("agent_service") or {}
+        with st.expander(f"📊 에이전트 운영 현황 요약 (총 {asm.get('total', 0)}건 · AI {asm.get('llm', 0)}건 · 템플릿 {asm.get('template', 0)}건)", expanded=False):
+            w1, w2, w3, w4 = st.columns(4)
+            w1.metric("작업 지시서", asm["total"])
+            w2.metric("AI 생성", asm["llm"])
+            w3.metric("템플릿", asm["template"], help="LLM을 쓰지 않았거나 검증에 실패해 매뉴얼 원문 템플릿으로 만든 지시서")
+            w4.metric("검색 방식", {"gemini": "Gemini 임베딩", "keyword": "키워드"}.get(ag.get("retrieval_mode"), "-"))
+            if asm.get("fallback_reasons"):
+                st.markdown("**템플릿 대체 사유:**")
+                for k, v in asm["fallback_reasons"].items():
+                    st.write(f"- {k}: {v}건")
+
+        wl, werr = get_cached_history(base, "/api/v1/agent/workorders", 50)
+        if werr:
+            st.error(werr)
+        elif not wl["data"]:
+            st.info("아직 작업 지시서가 없습니다. 알림이 발생하면 자동으로 생성됩니다. (서버 시작 후 새로 생긴 알림만 처리합니다)")
+        else:
+            def _label(r):
+                p = r["payload"]
+                return (f"{p['issued_at']} · {r['asset_id']} · {'긴급' if r['level'] == 'critical' else '주의'} · "
+                        f"{r['sop_code']} · {'AI' if r['llm_used'] else '템플릿'}")
+
+            pick = st.selectbox("작업 지시서 선택 (최근 50건)", range(len(wl["data"])), format_func=lambda i: _label(wl["data"][i]), key="wo_pick")
+            
+           # 작업지시서 대시보드 함수 
+            _render_workorder_card(wl["data"][pick])
+            
+            st.caption("ℹ️ 시한·SOP 코드·조치 문장은 매뉴얼 원문이며, AI는 상황 요약과 우선 조치 표시만 담당합니다. 검증에 실패하면 템플릿으로 대체됩니다.")
+
 
 #----관리자 탭 만들면 사용----
 #@st.fragment
@@ -419,7 +618,7 @@ with st.sidebar:
     st.subheader("알림 기준 (서버 설정)")
     st.caption(f"🟠 주의: Health Index {warn:g} 미만\n\n🔴 긴급: {crit:g} 미만\n\n회복 판정: 기준 +{hys:g} 이상 (알림 반복 방지)")
 
-    stale_after = st.slider("데이터 끊김 판정 (초)", 10, 3600, 120, step=10,
+    stale_after = st.slider("데이터 끊김 판정 (초)", 120, 5000, 3600, step=10,
                             help="마지막 수신 후 이 시간이 지나면 '끊김'(회색)으로 표시합니다. "
                                  "리플레이가 끝나면 새 데이터가 오지 않으므로 시간이 지나면 모든 엔진이 끊김이 됩니다.")
     hpc = st.number_input("1 사이클 = N 시간 (가정값)", min_value=0.1, max_value=1000.0, value=1.0, step=0.5,
@@ -439,9 +638,9 @@ if "shown_critical_ids" not in st.session_state:
 
 
 #@st.fragment(run_every=10)
-@st.fragment
+@st.fragment(run_every=5)
 def render():
-    st.button("🔄", key="btn_refresh")
+    # st.button("🔄", key="btn_refresh")
     summary, err = get_cached_api_get(base, "/api/v1/rul/summary")
     if err:
         st.error(err)
@@ -463,36 +662,8 @@ def render():
     if rep.get("error"):
         st.warning(f"리플레이 오류: {rep['error']}")
 
-    asum, aerr = api(base, "GET", "/api/v1/alerts/summary")
-    if asum:
-        nc, nw = asum["critical"]["unacked"], asum["warning"]["unacked"]
-        if nc:
-            st.error(f"🚨 미확인 긴급 알림 {nc}건 (주의 {nw}건) — '알림' 탭에서 확인하세요.")
-            #====================알림===========
-            res_crit, _ = api(base, "GET", "/api/v1/alerts", params={
-                "limit": max(nc, 1), # 확인 안된 모든 긴급알림
-                "unacked_only": "true",
-                "level": "critical"
-                })
-            items = (res_crit or {}).get("data", [])
-
-            if items:
-                # 2. 아직 팝업으로 띄운 적 없는 새 알림만 골라내기
-                new_items = [
-                    item for item in items 
-                    if item["id"] not in st.session_state["shown_critical_ids"]
-                ]
-
-                # 3. 새로운 긴급 알림이 감지되었을 때만 팝업 실행
-                if new_items:
-                    for item in new_items:
-                        st.session_state["shown_critical_ids"].add(item["id"])
-                    
-                    critical_alert_dialog(base, new_items)         
-            #======================================
-            
-        elif nw:
-            st.warning(f"⚠️ 미확인 주의 알림 {nw}건 — '알림' 탭에서 확인하세요.")
+    critical_alert_watcher()
+    
 
 
 
@@ -507,7 +678,7 @@ render()
 
 
 # 2. 탭 선택 및 선택된 탭 프래그먼트 호출
-tab_rul, tab_alert, tab_vib, tab_cwru = st.tabs(["설비 RUL · Health Index", "알림", "진동 · FFT", "**결함 분류 (CWRU)**"]) # 탭 이름을 설비이름으로 변경할 지 고려
+tab_rul, tab_alert, tab_vib, tab_cwru, tab_agent = st.tabs(["설비 RUL · Health Index", "알림", "진동 · FFT", "**결함 분류 (CWRU)**", "**AI 작업지시 에이전트**"]) # 탭 이름을 설비이름으로 변경할 지 고려
 with tab_rul:
     rul_tab_sow()
 
@@ -519,6 +690,8 @@ with tab_vib:
 
 with tab_cwru:
     cwru_tab_sow()
+with tab_agent:
+    agent_tab_sow()
 
 
 

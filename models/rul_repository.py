@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +43,24 @@ async def init_rul_tables(pool):
 
 def _parse_ts(ts) -> datetime:
     """메시지의 ISO 문자열 → timezone-aware datetime (asyncpg는 문자열을 TIMESTAMPTZ로 받지 못함)."""
+    #if isinstance(ts, str):
+    #    try:
+    #        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    #    except ValueError:
+    #        pass
+    #return datetime.now(timezone.utc)
+    KST = timezone(timedelta(hours=9))
+    
     if isinstance(ts, str):
         try:
-            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(KST)
         except ValueError:
             pass
-    return datetime.now(timezone.utc)
+    return datetime.now(KST)
+
 
 
 def to_record(r: dict) -> tuple:

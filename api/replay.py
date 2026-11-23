@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from models.alert_repository import init_alert_table
 from models.database import db_manager
 from models.cwru_repository import init_cwru_tables
+from models.workorder_repository import init_workorder_table
 from models.vib_repository import init_vib_tables
 
 router = APIRouter(prefix="/api/v1/replay", tags=["replay"])
@@ -54,15 +55,20 @@ async def reset_predictions(request: Request, confirm: bool = False):
     await init_alert_table(db_manager.pool)                  # 테이블이 없을 수 있으므로 보장
     await init_vib_tables(db_manager.pool)
     await init_cwru_tables(db_manager.pool)
+    await init_workorder_table(db_manager.pool)
     async with db_manager.pool.acquire() as conn:
         await conn.execute("TRUNCATE rul_predictions")
         await conn.execute("TRUNCATE alerts")
         await conn.execute("TRUNCATE vibration_scores, vibration_spectra")
         await conn.execute("TRUNCATE cwru_predictions")
+        await conn.execute("TRUNCATE work_orders")
     request.app.state.rul_service.alert_engine.reset()       # 엔진별 알림 단계도 초기화
     vib = getattr(request.app.state, "vib_service", None)
     if vib is not None:
         vib.reset()                                          # 진동 평활 이력과 알림 단계 초기화
+    ag = getattr(request.app.state, "agent_service", None)
+    if ag is not None:
+        ag.reset()                                           # 에이전트 처리 건수 초기화
     cw = getattr(request.app.state, "cwru_service", None)
     if cw is not None:
         cw.reset()                                           # CWRU 투표 이력 초기화

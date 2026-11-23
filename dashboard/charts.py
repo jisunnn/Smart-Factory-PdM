@@ -79,7 +79,7 @@ def spectrum_fig(freqs, cur, cur_label, ref=None, ref_label="", fault_hz=None):
     for name, f0 in (fault_hz or {}).items():
         if f0 <= float(freqs[-1]):
             fig.add_vline(x=f0, line_dash="dot", line_color="#4c78a8", annotation_text=name, annotation_position="top")
-    fig.update_layout(height=340, margin=dict(l=10, r=10, t=30, b=10), legend=dict(orientation="h", y=1.12),
+    fig.update_layout(height=340, margin=dict(l=10, r=10, t=30, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0,),
                       xaxis=dict(title="주파수 (Hz)"), yaxis=dict(title="엔벨로프 진폭"))
     return fig
 
