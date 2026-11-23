@@ -59,13 +59,27 @@ def critical_alert_dialog(base: str, critical_items: list[dict]):
                     width='stretch',
                 ):
                     _ack_alert(base, alert_id)
+                    
+                    # 아직 확인하지 않은 나머지 알림들은 다시 팝업에 표시되도록 기록에서 제외
+                    remaining_ids = {
+                        x["id"] for x in critical_items if x["id"] != alert_id
+                    }
+                    st.session_state["shown_critical_ids"] -= remaining_ids
+                    
                     st.rerun()
 #========================================알림 추가=====
 
 # ---------------------------------------------------------------- API 호출
+@st.cache_resource
+def get_http_session() -> requests.Session:
+    """앱 전체에서 HTTP 연결(Keep-Alive)을 재사용하기 위한 단일 세션"""
+    return requests.Session()
+
+
 def api(base, method, path, **kw):
+    session = get_http_session()
     try:
-        r = requests.request(method, f"{base}{path}", timeout=10, **kw)
+        r = session.request(method, f"{base}{path}", timeout=10, **kw)
         if r.status_code >= 400:
             try:
                 detail = r.json().get("detail", r.text)
@@ -79,25 +93,27 @@ def api(base, method, path, **kw):
         return None, str(e)
 
 
+
+
 # ===================================================== 캐시가 적용된 데이터 조회 함수들 추가==============
-@st.cache_data(ttl=5)  # 5초 동안은 동일한 경로의 GET 요청 결과를 캐시, ui에 안보이게 하기 옵션 : show_spinner=False 
+@st.cache_data(ttl=5, show_spinner=False)  # 5초 동안은 동일한 경로의 GET 요청 결과를 캐시, ui에 안보이게 하기 옵션 : show_spinner=False 
 def get_cached_api_get(base_url, path):
     res, err = api(base_url, "GET", path)
     return res, err
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=10, show_spinner=False)
 def get_cached_history(base_url, path, limit_val):
     res, err = api(base_url, "GET", path, params={"limit": limit_val})
     return res, err
 
 
-@st.cache_data(ttl=30)  # 진동 데이터는 조금 무거우니 ttl을 30초~1분 정도로
+@st.cache_data(ttl=30, show_spinner=False)  # 진동 데이터는 조금 무거우니 ttl을 30초~1분 정도로
 def get_cached_spectrum(base_url, bearing_id, limit_count):
     res, err = api(base_url, "GET", f"/api/v1/vib/spectrum/{bearing_id}", params={"limit": limit_count})
     return res, err
 
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=5, show_spinner=False)
 def get_cached_alerts(base_url: str, unacked_only: bool, limit_val: int = 30):
     res, err = api(
         base_url,
@@ -107,6 +123,19 @@ def get_cached_alerts(base_url: str, unacked_only: bool, limit_val: int = 30):
     )
     return res, err
 #-------------------------===================================
+@st.cache_data(ttl=5, show_spinner=False)
+def get_cached_alert_summary(base_url: str):
+    return api(base_url, "GET", "/api/v1/alerts/summary")
+
+#---------config api 캐시 길게 처리---------------------------------------------------
+@st.cache_data(ttl=600, show_spinner=False)
+def get_cached_config(base_url, path):
+    res, err = api(base_url, "GET", path)
+    if err:
+        get_cached_config.clear()  # 실패 시 캐싱하지 않고 다음번에 재시도
+    return res, err
+
+
 
 
 def show_table(df):
@@ -119,7 +148,6 @@ def show_table(df):
 
 
 #-------엔진 health_index 그래프 함수----------------------------------------------------------
-@st.fragment
 def health_index_show(df):
     if not df.empty:                  
         all_labels = list(STATUS_LABEL.values())
@@ -218,7 +246,6 @@ def ims_spectrum_show(vcfg, vdf):
                     "임계값(3σ 이상, 1위와 2위 차이 1.5σ 이상)은 검증 전 시작값이며, 이 데이터(IMS Set 2)에서 검증 가능한 결함은 외륜뿐입니다.")
 
 # -------cwru 그래프 함수------------------------------
-@st.fragment
 def cwru_show(clat, ccfg, cfiles):
     row = (clat or {}).get("data")
     if row:
@@ -238,7 +265,6 @@ def cwru_show(clat, ccfg, cfiles):
 
 
 # ------작업 지시서 부분 대시보드 함수
-@st.fragment
 def _render_workorder_card(wo: dict):
     """work_orders DB 레코드(wo)와 payload를 구조화된 UI 카드로 렌더링"""
     # payload가 문자열(JSON)로 내려올 경우를 대비한 안전 파싱
@@ -350,7 +376,7 @@ def _render_workorder_card(wo: dict):
 
 
 #-----알림 워커 함수
-@st.fragment(run_every=5)
+@st.fragment()
 def critical_alert_watcher():
     asum, aerr = api(base, "GET", "/api/v1/alerts/summary")
     if asum:
@@ -423,59 +449,88 @@ def rul_tab_sow():
 # ---------알림 탭 실행 함수--------------------------------------------------------------
 @st.fragment
 def alerts_tab_sow():  
-    asum, aerr = get_cached_api_get(base, "/api/v1/alerts/summary")
+    asum, aerr = get_cached_alert_summary(base)
     
     if not asum:
-            st.info(f"알림 정보를 불러오지 못했습니다. {aerr or ''}")
-    else:
-        k1, k2, k3, k4 = st.columns([1, 1, 1, 1])
-        k1.metric("🔴 긴급 (미확인/전체)", f"{asum['critical']['unacked']} / {asum['critical']['total']}")
-        k2.metric("🟠 주의 (미확인/전체)", f"{asum['warning']['unacked']} / {asum['warning']['total']}") 
-        only = k3.checkbox("미확인만 보기", value=True, key="alerts_unacked")
-        conut_all = asum['critical']['total'] + asum['warning']['total']
-        if k4.button("모두 확인 처리"):
-            _, err = api(base, "POST", "/api/v1/alerts/ack-all")
-            if err:
-                st.warning(f"일괄 확인 실패: {err}")
-            else:
-                get_cached_alerts.clear()
-                get_cached_api_get.clear()
-                st.rerun(scope="fragment")
-        res, err = get_cached_alerts(base, only, max(conut_all, 1)) # api(base, "GET", "/api/v1/alerts", params={"limit": 30, "unacked_only": str(only).lower()})
-        st.markdown("<hr style='margin: 4px 0 10px 0; border-color: rgba(255,255,255,0.1);'>", unsafe_allow_html=True)
-        header_cols = st.columns([1.1, 1.6, 6, 1.2], vertical_alignment="bottom")
-        header_cols[0].caption("**알림 단계**")      # 상세한 조정 시 st.markdown("**알림 단계**")
-        header_cols[1].caption("**대상**")
-        header_cols[2].caption("**상세 내용**")
-        header_cols[3].caption("**확인 처리**")
+        st.info(f"알림 정보를 불러오지 못했습니다. {aerr or ''}")
+        return
 
-        st.markdown("<hr style='margin: 4px 0 10px 0; border-color: rgba(255,255,255,0.1);'>", unsafe_allow_html=True)
+    k1, k2, k3, k4 = st.columns([1.2, 1.2, 1, 1])
+    k1.metric("🔴 긴급 (미확인/전체)", f"{asum['critical']['unacked']} / {asum['critical']['total']}")
+    k2.metric("🟠 주의 (미확인/전체)", f"{asum['warning']['unacked']} / {asum['warning']['total']}") 
+    only = k3.checkbox("미확인만 보기", value=True, key="alerts_unacked")
+    
+    if k4.button("전체 모두 확인", width="stretch"):
+        _, err = api(base, "POST", "/api/v1/alerts/ack-all")
         if err:
-            st.error(err)
-        elif not res["data"]:
-            st.success("표시할 알림이 없습니다.")
+            st.warning(f"일괄 확인 실패: {err}")
         else:
-            for a in res["data"]:
-                c = st.columns([1.1, 1.6, 6, 1.2])
-                c[0].write("🔴 긴급" if a["level"] == "critical" else "🟠 주의")
-                c[1].write(alert_where(a))
-                c[2].write(a["message"])
-                if a["acknowledged"]:
-                    c[3].caption("확인 완료")
-                elif c[3].button("확인", key=f"ack_{a['id']}"):
-                    _, err = api(base, "POST", f"/api/v1/alerts/{a['id']}/ack")
-                    if err:
-                        st.warning(f"확인 처리 실패 (ID {a['id']}): {err}")
-                    else:
-                        get_cached_alerts.clear()
-                        get_cached_api_get.clear()
-                    st.rerun(scope="fragment")
+            get_cached_alerts.clear()
+            get_cached_alert_summary.clear()
+            st.rerun(scope="fragment")
+
+    res, err = get_cached_alerts(base, only, 100)
+    
+    if err:
+        st.error(err)
+        return
+    if not res or not res.get("data"):
+        st.success("표시할 알림이 없습니다.")
+        return
+
+    # 1. 데이터를 표(DataFrame) 형태로 변환
+    rows = []
+    for a in res["data"]:
+        rows.append({
+            "id": a["id"],
+            "선택": False,  # 체크박스 컬럼
+            "상태": "✅ 확인됨" if a["acknowledged"] else "⏳ 미확인",
+            "알림 단계": "🔴 긴급" if a["level"] == "critical" else "🟠 주의",
+            "대상": alert_where(a),
+            "상세 내용": a["message"],
+            "acknowledged": a["acknowledged"],
+        })
+    df_alerts = pd.DataFrame(rows)
+
+    # 2. 체크박스 편집 가능한 단일 표 렌더링 (수십 개 루프보다 수십 배 빠름)
+    edited_df = st.data_editor(
+        df_alerts[["선택", "상태", "알림 단계", "대상", "상세 내용"]],
+        hide_index=True,
+        width="stretch",
+        height=420,
+        disabled=["상태", "알림 단계", "대상", "상세 내용"],  # 체크박스 외 컬럼은 수정 불가
+        column_config={
+            "선택": st.column_config.CheckboxColumn("선택", default=False, width="small"),
+            "상태": st.column_config.TextColumn("상태", width="small"),
+            "알림 단계": st.column_config.TextColumn("알림 단계", width="small"),
+            "대상": st.column_config.TextColumn("대상", width="medium"),
+            "상세 내용": st.column_config.TextColumn("상세 내용", width="large"),
+        },
+        key="alerts_editor_table",
+    )
+
+    # 3. 체크된 항목만 골라서 확인 처리 실행
+    selected_indices = edited_df[edited_df["선택"]].index.tolist()
+    if selected_indices:
+        # 이미 확인된 항목 제외하고 미확인 ID만 추출
+        target_ids = [
+            int(df_alerts.loc[idx, "id"])
+            for idx in selected_indices
+            if not df_alerts.loc[idx, "acknowledged"]
+        ]
+        
+        if st.button(f"선택한 알림 확인 처리 ({len(target_ids)}건)", type="primary"):
+            for aid in target_ids:
+                api(base, "POST", f"/api/v1/alerts/{aid}/ack")
+            get_cached_alerts.clear()
+            get_cached_alert_summary.clear()
+            st.rerun(scope="fragment")
 
 # -------진동 · FFT 탭 함수-----------------------------------------------------------
 @st.fragment
 def vib_tab_sow():
     st.button("🔄", key="btn_refresh_vib")
-    vcfg, _ = get_cached_api_get(base, "/api/v1/vib/config")
+    vcfg, _ = get_cached_config(base, "/api/v1/vib/config")
     vlat, verr = get_cached_api_get(base, "/api/v1/vib/latest")
     vdf = vib_latest_to_df(vlat["data"], warn, crit, stale_after) if vlat else pd.DataFrame()
     if verr:
@@ -519,7 +574,7 @@ def cwru_tab_sow():
     st.caption("CWRU Random Forest 분류기: 0HP 데이터로 학습한 모델이 학습에 쓰지 않은 3HP 파일의 윈도우를 정상·내륜·볼·외륜으로 분류합니다. IMS 신호에는 쓰지 않습니다.")
     cfiles, cerr = get_cached_api_get(base, "/api/v1/cwru/files")
     clat, _ = get_cached_api_get(base, "/api/v1/cwru/latest")
-    ccfg, _ = get_cached_api_get(base, "/api/v1/cwru/config")
+    ccfg, _ = get_cached_config(base, "/api/v1/cwru/config")
     if cerr:
         st.error(cerr)
     elif not cfiles or not cfiles["data"]:
@@ -565,6 +620,27 @@ def agent_tab_sow():
             
             st.caption("ℹ️ 시한·SOP 코드·조치 문장은 매뉴얼 원문이며, AI는 상황 요약과 우선 조치 표시만 담당합니다. 검증에 실패하면 템플릿으로 대체됩니다.")
 
+@st.fragment
+def main_content_area():
+    menu = st.segmented_control(
+        "메뉴 선택",
+        options=["설비 RUL · Health Index", "알림", "진동 · FFT", "결함 분류 (CWRU)", "AI 작업지시 에이전트"],
+        default="설비 RUL · Health Index",
+        label_visibility="collapsed",
+        key="main_menu_nav"
+    )
+
+    if menu == "설비 RUL · Health Index":
+        rul_tab_sow()
+    elif menu == "알림":
+        alerts_tab_sow()
+    elif menu == "진동 · FFT":
+        vib_tab_sow()
+    elif menu == "결함 분류 (CWRU)":
+        cwru_tab_sow()
+    elif menu == "AI 작업지시 에이전트":
+        agent_tab_sow()
+
 
 #----관리자 탭 만들면 사용----
 #@st.fragment
@@ -593,12 +669,14 @@ with st.sidebar:
         if err:
             st.error(err)
         else:
+            st.session_state["is_replaying"] = True 
             st.success("리플레이를 시작했습니다.")
     if c2.button("■ 중지"):
         res, err = api(base, "POST", "/api/v1/replay/stop")
         if err:
             st.error(err)
         else:
+            st.session_state["is_replaying"] = False
             st.info("중지했습니다.")
 
     with st.expander("DB 초기화"):
@@ -638,7 +716,9 @@ if "shown_critical_ids" not in st.session_state:
 
 
 #@st.fragment(run_every=10)
-@st.fragment(run_every=5)
+poll_interval = 5 if st.session_state.get("is_replaying", False) else None
+
+@st.fragment(run_every=poll_interval)
 def render():
     # st.button("🔄", key="btn_refresh")
     summary, err = get_cached_api_get(base, "/api/v1/rul/summary")
@@ -655,8 +735,10 @@ def render():
     m4.metric("RUL 추론 서비스", "실행 중" if svc.get("running") else "중지")
     vs = (vsum or {}).get("vib_service") or {}
     m5.metric("진동 추론 서비스", "-" if not vsum else ("실행 중" if vs.get("running") else "중지"))
-    if rep.get("total"):
+    # if rep.get("total"):
+    if rep.get("status") == "running" and rep.get("total"):
         st.progress(min(rep["sent"] / rep["total"], 1.0), text=f"리플레이 {rep['sent']:,} / {rep['total']:,}")
+        
     if svc.get("error"):
         st.warning(f"RUL 서비스 오류: {svc['error']}")
     if rep.get("error"):
@@ -675,23 +757,23 @@ def render():
 #    _top_live()
 
 render()
-
+main_content_area()
 
 # 2. 탭 선택 및 선택된 탭 프래그먼트 호출
-tab_rul, tab_alert, tab_vib, tab_cwru, tab_agent = st.tabs(["설비 RUL · Health Index", "알림", "진동 · FFT", "**결함 분류 (CWRU)**", "**AI 작업지시 에이전트**"]) # 탭 이름을 설비이름으로 변경할 지 고려
-with tab_rul:
-    rul_tab_sow()
+#tab_rul, tab_alert, tab_vib, tab_cwru, tab_agent = st.tabs(["설비 RUL · Health Index", "알림", "진동 · FFT", "**결함 분류 (CWRU)**", "**AI 작업지시 에이전트**"]) # 탭 이름을 설비이름으로 변경할 지 고려
+#with tab_rul:
+#    rul_tab_sow()
 
-with tab_alert:
-    alerts_tab_sow()   
+#with tab_alert:
+#    alerts_tab_sow()   
 
-with tab_vib:
-    vib_tab_sow()
+#with tab_vib:
+#    vib_tab_sow()
 
-with tab_cwru:
-    cwru_tab_sow()
-with tab_agent:
-    agent_tab_sow()
+#with tab_cwru:
+#    cwru_tab_sow()
+#with tab_agent:
+#    agent_tab_sow()
 
 
 
