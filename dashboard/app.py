@@ -30,7 +30,7 @@ def _ack_alert(base: str, alert_id: int):
 @st.dialog("🚨 긴급 설비 점검 알림 (Critical)", width="large")
 def critical_alert_dialog(base: str, critical_items: list[dict]):
     alert_count = len(critical_items)
-    st.error(f"긴급 설비 이상이 감지되었습니다! 즉각적인 조치가 필요합니다. :yellow[[{alert_count}개]]")
+    st.error(f"긴급 설비 이상이 감지되었습니다! 즉각적인 조치가 필요합니다.")
     st.caption("각 설비 카드의 '확인 완료'를 누르면 해당 알림만 개별 처리됩니다.")
 
     cols = st.columns(2)
@@ -372,7 +372,7 @@ def _render_workorder_card(wo: dict):
     if evidence:
         with st.expander("📚 참조 매뉴얼 근거 문단 보기"):
             for ev in evidence:
-                st.write(f"- {ev}")
+                st.write(f"- [ **SOP ID** : {ev['id']}], [ **항목** : {ev['ref']}], [ **내용** : {ev['text']}]")
 
 
 #-----알림 워커 함수
@@ -658,7 +658,7 @@ with st.sidebar:
                         format_func=lambda k: {"cycle": "C-MAPSS FD001 (엔진 RUL)", "vibration": "IMS Set 2 (베어링 4개 진동)",
                                                "cwru": "CWRU 3HP (베어링 결함 분류)"}[k],
                         help="IMS: 파일 984개 x 베어링 4개 = 3,936건(보통 속도 약 3분). CWRU: 3HP 파일의 2048샘플 윈도우를 재생합니다.")
-    speed = st.select_slider("재생 속도", options=["느림", "보통", "빠름"], value="보통",
+    speed = st.select_slider("재생 속도", options=["느림", "보통", "빠름"], value="빠름",
                              help="느림 0.2초 / 보통 0.05초 / 빠름 0.005초 (메시지 간격)")
     interval = {"느림": 0.2, "보통": 0.05, "빠름": 0.005}[speed]
     loop = st.checkbox("끝나면 처음부터 반복")
@@ -687,6 +687,7 @@ with st.sidebar:
                 st.error(err)  
             else:
                 st.success("초기화했습니다.")
+                st.rerun()
 
     cfg, _ = get_cached_api_get(base, "/api/v1/alerts/config")
 
@@ -715,8 +716,8 @@ if "shown_critical_ids" not in st.session_state:
     st.session_state["shown_critical_ids"] = set()
 
 
-#@st.fragment(run_every=10)
-poll_interval = 5 if st.session_state.get("is_replaying", False) else None
+
+poll_interval = 1 if st.session_state.get("is_replaying", False) else None
 
 @st.fragment(run_every=poll_interval)
 def render():

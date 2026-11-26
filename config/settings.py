@@ -45,7 +45,7 @@ class Settings:
 
     # 리플레이용 데이터 폴더 (본인 경로로 .env 에서 지정)
     CMAPSS_DATA_DIR: str = os.getenv("CMAPSS_DATA_DIR", "C:/factory_pdm_data/cmapss")
-    IMS_DATA_DIR: str = os.getenv("IMS_DATA_DIR", "C:/factory_pdm_data/ims/2nd_test")
+    IMS_DATA_DIR: str = os.getenv("IMS_DATA_DIR", "C:/factory_pdm_data/2nd_test")
     CWRU_DATA_DIR: str = os.getenv("CWRU_DATA_DIR", "C:/factory_pdm_data/cwru")
 
     # 알림 기준 (Health Index)
