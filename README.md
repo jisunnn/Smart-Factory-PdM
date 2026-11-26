@@ -7,7 +7,7 @@ Kafka · TimescaleDB · FastAPI · Streamlit으로 만들었고, 공개 벤치�
 
 > 🎬 시연 영상: https://github.com/user-attachments/assets/78d5a945-5487-49ff-be9d-e16bac1d663e |  📑 발표 자료: [`docs/PdM_관제시스템_발표_v2.pptx`](docs/PdM_관제시스템_발표_v2.pptx)
 
-![대시보드] <img width="1847" height="924" alt="dashboard" src="https://github.com/user-attachments/assets/8ff8dc36-0595-4590-a932-f1fa4f4532da" />
+[대시보드] <img width="1847" height="924" alt="dashboard" src="https://github.com/user-attachments/assets/8ff8dc36-0595-4590-a932-f1fa4f4532da" />
 
 ## 한눈에 보기
 
@@ -63,7 +63,8 @@ flowchart LR
 | **서버 ↔ Colab 일치** | 진동 점수의 Health Index 오차 0.00001 이하, CWRU 분류 확률은 scikit-learn과 완전 일치 |
 | **알림** | 엔진 100대 한 번 재생에 긴급 29건, 주의 60건 (단계가 올라갈 때만 기록) |
 
-![IMS 건전성 지수](docs/images/ims_hi.png)
+
+[IMS 건전성 지수] <img width="1500" height="431" alt="ims_hi" src="https://github.com/user-attachments/assets/248e7521-c0e8-4d4c-9f3c-fa8841b07d21" />
 *IMS: 베어링 1이 고장 난 베어링. 약 89시간부터 건전성 지수가 떨어집니다.*
 
 ## 대시보드 구성
