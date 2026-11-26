@@ -1,11 +1,11 @@
 
-[README (1).md](https://github.com/user-attachments/files/35446824/README.1.md)
 # 예지보전(PdM) 관제 시스템
 
 설비 센서 데이터를 실시간으로 받아 **잔여수명(RUL) 예측, 베어링 이상 감지·결함 분류, 알림, 작업 지시서 생성**까지 한 화면에서 보여 주는 관제 시스템입니다.
 Kafka · TimescaleDB · FastAPI · Streamlit으로 만들었고, 공개 벤치마크 데이터(NASA C-MAPSS, NASA IMS, CWRU)로 구현·검증했습니다.
 
-> 🎬 시연 영상: https://github.com/user-attachments/assets/78d5a945-5487-49ff-be9d-e16bac1d663e |  📑 발표 자료: [`docs/PdM_관제시스템_발표_v2.pptx`](docs/PdM_관제시스템_발표_v2.pptx)
+> 🎬 시연 영상: https://github.com/user-attachments/assets/78d5a945-5487-49ff-be9d-e16bac1d663e 
+> 📑 발표 자료: [`docs/PdM_관제시스템_발표_v2.pptx`](docs/PdM_관제시스템_발표_v2.pptx)
 
 [대시보드] <img width="1847" height="924" alt="dashboard" src="https://github.com/user-attachments/assets/8ff8dc36-0595-4590-a932-f1fa4f4532da" />
 
