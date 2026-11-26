@@ -6,7 +6,7 @@ Kafka · TimescaleDB · FastAPI · Streamlit으로 만들었고, 공개 벤치�
 
 > 🎬 시연 영상: https://github.com/user-attachments/assets/78d5a945-5487-49ff-be9d-e16bac1d663e 
 
-> 📑 발표 자료: [`docs/PdM_관제시스템_발표_v2.pptx`](docs/PdM_관제시스템_발표_v2.pptx)
+> 📑 발표 자료: dosc/PdM_관제시스템_발표 자료.pptx
 
 [대시보드] <img width="1847" height="924" alt="dashboard" src="https://github.com/user-attachments/assets/8ff8dc36-0595-4590-a932-f1fa4f4532da" />
 
