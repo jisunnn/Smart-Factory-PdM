@@ -7,3 +7,6 @@ env.bak
 venv.bak
 __pycache__/
 agent/knowledge/embeddings_cache.json
+
+# 단, .env.example 파일은 Git에 포함
+!.env.example
